@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Shuffle Bot</string>
+    <string name="service_description">Mostra um botão flutuante que lê o tabuleiro do Pokémon Shuffle e faz as jogadas automaticamente.</string>
+</resources>
