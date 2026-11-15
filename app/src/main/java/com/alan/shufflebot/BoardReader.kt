@@ -50,8 +50,8 @@ class BoardReader(private val blocks: Int = 4, private val inset: Float = 0.18f)
                 }
             }
             for (b in 0 until blocks * blocks) {
-                val k = cnt[b].coerceAtLeast(1)
-                f[b * 3] /= k; f[b * 3 + 1] /= k; f[b * 3 + 2] /= k
+                val k = cnt[b].coerceAtLeast(1).toFloat()
+                for (ch in 0 until 3) f[b * 3 + ch] = f[b * 3 + ch] / k
             }
             f
         }
