@@ -15,10 +15,20 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("fixa") {
+            storeFile = file("shufflebot.jks")
+            storePassword = "shufflebot"
+            keyAlias = "shufflebot"
+            keyPassword = "shufflebot"
+        }
+    }
+
     buildTypes {
+        debug { signingConfig = signingConfigs.getByName("fixa") }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("fixa")
         }
     }
     compileOptions {
