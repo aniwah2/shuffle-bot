@@ -41,6 +41,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("dex", true)
         set(v) = sp.edit().putBoolean("dex", v).apply()
 
+    /** Captura contínua da tela (mais rápida; pede permissão de captura ao iniciar). */
+    var fastCapture: Boolean
+        get() = sp.getBoolean("fastCap", true)
+        set(v) = sp.edit().putBoolean("fastCap", v).apply()
+
     var panelX: Int
         get() = sp.getInt("px", 20)
         set(v) = sp.edit().putInt("px", v).apply()

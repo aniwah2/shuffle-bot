@@ -94,6 +94,7 @@ class BotService : AccessibilityService() {
         teamView?.let { runCatching { wm.removeView(it) } }
         panel?.let { runCatching { wm.removeView(it) } }
         instance = null
+        runCatching { stopService(android.content.Intent(this, CaptureService::class.java)) }
         shotExecutor.shutdown()
         super.onDestroy()
     }
@@ -339,9 +340,26 @@ class BotService : AccessibilityService() {
 
     // ---------------------------------------------------------------- liga/desliga
 
+    /** Chamado pela tela de permissão de captura: liga o bot (com ou sem captura rápida). */
+    fun onCaptureReady(ok: Boolean) {
+        main.postDelayed({
+            if (!ok) status("Sem captura rápida — usando prints (mais lento)")
+            launchWorker()
+        }, if (ok) 600 else 0)
+    }
+
     private fun startBot() {
         if (frame != null) toggleCalibration()
         if (teamView != null) toggleTeam()
+        if (Prefs(this).fastCapture && CaptureService.instance == null) {
+            status("Permita a captura da tela (escolha \"Tela inteira\")")
+            CaptureActivity.request(this)
+            return
+        }
+        launchWorker()
+    }
+
+    private fun launchWorker() {
         running = true
         startBtn?.text = "⏸ Parar"
         worker = Thread({
@@ -468,8 +486,11 @@ class BotService : AccessibilityService() {
                 Thread.sleep(150); continue
             }
 
-            val bmp = screenshot()
-            if (bmp == null) { Thread.sleep(60); continue }
+            val bmp = grabFrame()
+            if (bmp == null) { Thread.sleep(30); continue }
+            // captura rápida: se a tela não mudou, não reprocessa à toa (mas reavalia a cada 250 ms)
+            if (bmp === lastFrame && System.currentTimeMillis() - lastFrameAt < 250) { Thread.sleep(8); continue }
+            lastFrame = bmp; lastFrameAt = System.currentTimeMillis()
             var f0 = reader.features(bmp, g)
             var b0 = if (f0 != null) reader.frozenByBorder(bmp, g) else null
             // Esperando a batalha: compara a grade atual com a estimativa automática no MESMO print e fica com a melhor
@@ -492,12 +513,11 @@ class BotService : AccessibilityService() {
                 val y0 = (g.top - g.size * 0.27f).toInt().coerceIn(0, bmp.height - 1)
                 val w = (bmp.width - x0).coerceAtLeast(1)
                 val h = (g.size * 0.23f).toInt().coerceIn(1, bmp.height - y0)
-                runCatching { Bitmap.createBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop ->
+                runCatching { regionBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop ->
                     readOpponent(crop) { e -> if (e != null) opponentRef.set(e) }
                 }
             }
             if (wantGhost) { saveGhost(bmp, g); wantGhost = false }
-            bmp.recycle()
             val feats = f0
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
             val border = b0
@@ -887,10 +907,10 @@ class BotService : AccessibilityService() {
     private fun ghostFile() = java.io.File(filesDir, "tabuleiro_referencia.png")
 
     /** Guarda uma foto do tabuleiro (recortado pela grade) para usar como referência na calibração. */
-    private fun saveGhost(bmp: Bitmap, g: BoardGeom) {
+    private fun saveGhost(bmp: ArrayImg, g: BoardGeom) {
         runCatching {
             if (g.left < 0 || g.top < 0 || g.left + g.size > bmp.width || g.top + g.size > bmp.height) return
-            val crop = Bitmap.createBitmap(bmp, g.left, g.top, g.size, g.size)
+            val crop = regionBitmap(bmp, g.left, g.top, g.size, g.size)
             val small = Bitmap.createScaledBitmap(crop, 480, 480, true)
             crop.recycle()
             ghostFile().outputStream().use { small.compress(Bitmap.CompressFormat.PNG, 90, it) }
@@ -903,7 +923,10 @@ class BotService : AccessibilityService() {
     }.getOrNull()
 
     /** Quão bem essa grade lê um tabuleiro: Pokémon reconhecidos (com Dex) ou tabuleiro sem problema. */
-    private fun boardScore(reader: BoardReader, bmp: Bitmap, g: BoardGeom, thr: Float, useDex: Boolean): Int {
+    private fun boardScore(reader: BoardReader, bmp: Bitmap, g: BoardGeom, thr: Float, useDex: Boolean): Int =
+        boardScore(reader, BitmapImg(bmp), g, thr, useDex)
+
+    private fun boardScore(reader: BoardReader, bmp: Img, g: BoardGeom, thr: Float, useDex: Boolean): Int {
         val f = reader.features(bmp, g) ?: return -1
         val v = reader.analyze(f, thr, reader.frozenByBorder(bmp, g))
         if (useDex) {
@@ -912,6 +935,30 @@ class BotService : AccessibilityService() {
         }
         return if (reader.boardProblem(v) == null) 1 else 0
     }
+
+    @Volatile private var lastShotAt = 0L
+    @Volatile private var lastFrame: ArrayImg? = null
+    @Volatile private var lastFrameAt = 0L
+
+    /**
+     * Imagem atual da tela, já em pixels (lida de uma vez, sem ir pixel a pixel).
+     * Com a captura rápida: o quadro mais recente, na hora. Sem ela: print da acessibilidade (máx. ~3/s).
+     */
+    private fun grabFrame(): ArrayImg? {
+        CaptureService.instance?.let { cap ->
+            val f = cap.grab()
+            if (f != null) return f
+        }
+        val bmp = screenshot() ?: return null
+        val px = IntArray(bmp.width * bmp.height)
+        bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+        val img = ArrayImg(bmp.width, bmp.height, px)
+        bmp.recycle()
+        return img
+    }
+
+    private fun regionBitmap(img: ArrayImg, x: Int, y: Int, w: Int, h: Int): Bitmap =
+        Bitmap.createBitmap(img.px, y * img.width + x, img.width, w, h, Bitmap.Config.ARGB_8888)
 
     /** Print com novas tentativas: o Android só permite ~3 prints por segundo. */
     private fun screenshotRetry(tries: Int = 4): Bitmap? {
@@ -923,6 +970,10 @@ class BotService : AccessibilityService() {
     }
 
     private fun screenshot(): Bitmap? {
+        // o Android recusa prints com menos de ~1/3 s de intervalo: espera o tempo exato em vez de errar e tentar de novo
+        val wait = 340 - (System.currentTimeMillis() - lastShotAt)
+        if (wait > 0) Thread.sleep(wait)
+        lastShotAt = System.currentTimeMillis()
         val latch = CountDownLatch(1)
         var out: Bitmap? = null
         main.post {

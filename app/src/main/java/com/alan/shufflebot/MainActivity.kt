@@ -77,6 +77,11 @@ class MainActivity : Activity() {
             isChecked = prefs.useDex
         }
         col.addView(dex)
+        val fast = CheckBox(this).apply {
+            text = "Captura rápida da tela (bem mais jogadas por segundo; o Android pede permissão ao iniciar — escolha \"Tela inteira\")"
+            isChecked = prefs.fastCapture
+        }
+        col.addView(fast)
 
         col.addView(Button(this).apply {
             text = "Salvar ajustes"
@@ -88,6 +93,7 @@ class MainActivity : Activity() {
                 prefs.afterMoveMs = v(after, 0).coerceIn(0, 3000)
                 prefs.waitStable = stable.isChecked
                 prefs.useDex = dex.isChecked
+                prefs.fastCapture = fast.isChecked
                 Toast.makeText(this@MainActivity, "Salvo! Vale a partir do próximo ▶ Iniciar.", Toast.LENGTH_SHORT).show()
             }
         })
