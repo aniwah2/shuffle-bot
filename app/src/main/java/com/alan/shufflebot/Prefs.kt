@@ -36,6 +36,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("stable2", false)
         set(v) = sp.edit().putBoolean("stable2", v).apply()
 
+    /** Usar a Shuffle Dex (tipo, habilidades, Mega) para escolher as jogadas. */
+    var useDex: Boolean
+        get() = sp.getBoolean("dex", true)
+        set(v) = sp.edit().putBoolean("dex", v).apply()
+
     var panelX: Int
         get() = sp.getInt("px", 20)
         set(v) = sp.edit().putInt("px", v).apply()

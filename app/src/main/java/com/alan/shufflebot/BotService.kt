@@ -9,6 +9,9 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Environment
 import android.provider.MediaStore
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import android.graphics.Color
 import android.graphics.Insets
 import android.graphics.Path
@@ -378,6 +381,13 @@ class BotService : AccessibilityService() {
         var g = prefs.geom() ?: return       // usa a grade salva; só reajusta antes da batalha, se não conseguir ler
         var lastFitTry = 0L
         var emptyMovesOff = false        // se soltar em casa vazia não funcionar no jogo, desliga
+
+        // ---- Shuffle Dex: quem é cada Pokémon do time e quem é o inimigo
+        val useDex = prefs.useDex && runCatching { Dex.load(this) }.isSuccess
+        val knownEntry = ArrayList<DexEntry?>()           // mesma ordem de "known"
+        val opponentRef = java.util.concurrent.atomic.AtomicReference<DexEntry?>(null)
+        var ocrTries = 0
+        var lastOcr = 0L
         var emptyFails = 0; var emptyOk = 0
         var boardishSince = 0L
         val total = g.n * g.n
@@ -444,6 +454,17 @@ class BotService : AccessibilityService() {
             if (bmp == null) { Thread.sleep(60); continue }
             val feats = reader.features(bmp, g)
             val border = if (feats != null) reader.frozenByBorder(bmp, g) else null
+            if (useDex && known.isNotEmpty() && opponentRef.get() == null && ocrTries < 5 &&
+                System.currentTimeMillis() - lastOcr > 3000) {
+                lastOcr = System.currentTimeMillis(); ocrTries++
+                val x0 = (g.left + g.size * 0.45f).toInt().coerceIn(0, bmp.width - 1)
+                val y0 = (g.top - g.size * 0.27f).toInt().coerceIn(0, bmp.height - 1)
+                val w = (bmp.width - x0).coerceAtLeast(1)
+                val h = (g.size * 0.23f).toInt().coerceIn(1, bmp.height - y0)
+                runCatching { Bitmap.createBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop ->
+                    readOpponent(crop) { e -> if (e != null) opponentRef.set(e) }
+                }
+            }
             bmp.recycle()
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
             val now = System.currentTimeMillis()
@@ -468,7 +489,10 @@ class BotService : AccessibilityService() {
                         looks.all { l -> prevC.any { reader.dist(it, l) < knownThr } }
                     candidateStreak = if (same) candidateStreak + 1 else 0
                     candidate = looks
-                    if (candidateStreak >= 2) known.addAll(looks)
+                    if (candidateStreak >= 2) {
+                        known.addAll(looks)
+                        for (l in looks) knownEntry.add(if (useDex) Dex.identify(l) else null)
+                    }
                 } else {
                     candidate = null; candidateStreak = 0
                 }
@@ -510,7 +534,11 @@ class BotService : AccessibilityService() {
                     val same = prevA != null && newLooks.all { l -> prevA.any { reader.dist(it, l) < knownThr } }
                     adoptStreak = if (same) adoptStreak + 1 else 0
                     adopt = newLooks
-                    if (adoptStreak >= 1) { known.addAll(newLooks); adopt = null; adoptStreak = 0; continue }
+                    if (adoptStreak >= 1) {
+                        known.addAll(newLooks)
+                        for (l in newLooks) knownEntry.add(if (useDex) Dex.identify(l) else null)
+                        adopt = null; adoptStreak = 0; continue
+                    }
                 } else { adopt = null; adoptStreak = 0 }
 
                 if (lostSince == 0L) lostSince = now
@@ -523,7 +551,9 @@ class BotService : AccessibilityService() {
             }
             lostSince = 0L
             // Pokémon novos que apareçam no meio da batalha (disruptions) entram na lista
-            if (known.size < 12) for (l in freeLooks(view, feats, 3)) if (!isKnown(l)) known.add(l)
+            if (known.size < 12) for (l in freeLooks(view, feats, 3)) if (!isKnown(l)) {
+                known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
+            }
 
             // 4) a última jogada funcionou? (se o tabuleiro não mudou, era pedra/bloco: não tentar de novo)
             val lm = lastMove
@@ -549,7 +579,24 @@ class BotService : AccessibilityService() {
             val types = view.types
             val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) }
             val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
-            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen, roles, emptyCells)
+            var value: SpeciesValue? = null
+            var dexTxt = ""
+            if (useDex) {
+                val looks = reader.speciesLook(view, feats)
+                val maxSp = view.species.maxOrNull() ?: -1
+                val ents = arrayOfNulls<DexEntry>(maxSp + 1)
+                for ((sp, look) in looks) {
+                    var bi = -1; var bd = Float.MAX_VALUE
+                    for (k in known.indices) { val d = reader.dist(known[k], look); if (d < bd) { bd = d; bi = k } }
+                    if (bi >= 0 && bd < knownThr) ents[sp] = knownEntry.getOrNull(bi)
+                }
+                val megaEvolved = knownEntry.any { it?.isMega == true }
+                val disruptions = view.blocks > 0 || view.frozen.any { it }
+                val opp = opponentRef.get()
+                value = SpeciesValue.from(ents, opp, disruptions, megaEvolved)
+                if (opp != null) dexTxt = " • vs ${opp.name}"
+            }
+            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen, roles, emptyCells, value)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
                 failed.clear(); cellFails.fill(0)
@@ -564,7 +611,7 @@ class BotService : AccessibilityService() {
                 if (fz > 0) append(" • $fz no gelo")
             }
             val teamTxt = if (roles != null && roles.any { it != Role.NORMAL }) " • time ✓" else ""
-            status("Jogando • $types tipos$extra$teamTxt • jogada $moves")
+            status("Jogando$dexTxt • $types tipos$extra$teamTxt • jogada $moves")
             beforeMove = feats
             lastMove = mv
             drag(g.center(mv.from), g.center(mv.to), prefs)
@@ -610,6 +657,11 @@ class BotService : AccessibilityService() {
                 lines.add("tipos: ${view.types} • blocos: ${view.blocks} • gelo: $fz • vazias: ${view.empty} • tolerância: ${prefs.threshold}")
                 lines.add("diagnóstico: ${reader.boardProblem(view) ?: "tabuleiro OK"} • brilho ${reader.brightness(feats).toInt()}")
                 val blockedNow = BooleanArray(g.n * g.n) { !view.movable[it] }
+                if (prefs.useDex && runCatching { Dex.load(this) }.isSuccess) {
+                    val names = reader.speciesLook(view, feats).entries.sortedBy { it.key }
+                        .joinToString { (sp, look) -> "$sp=" + (Dex.identify(look)?.name ?: "?") }
+                    lines.add("Dex: $names")
+                }
                 val dbgRoles = reader.rolesFor(view, feats, prefs.team, prefs.threshold * 1.3f)
                 if (dbgRoles != null) lines.add("time: " + dbgRoles.withIndex().filter { it.value != Role.NORMAL }
                     .joinToString { "${it.index}=${it.value.label}" }.ifEmpty { "nenhum reconhecido" })
@@ -666,6 +718,27 @@ class BotService : AccessibilityService() {
             out.recycle()
             status(if (ok) "📷 Print salvo na Galeria (ShuffleBot)" else "Não consegui salvar o print")
         }.start()
+    }
+
+    private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+
+    /** Lê o nome do inimigo (caixinha à direita, acima do tabuleiro) e procura na Shuffle Dex. */
+    private fun readOpponent(crop: Bitmap, onResult: (DexEntry?) -> Unit) {
+        try {
+            recognizer.process(InputImage.fromBitmap(crop, 0))
+                .addOnSuccessListener { t ->
+                    var found: DexEntry? = null
+                    for (block in t.textBlocks) {
+                        val cands = block.lines.map { it.text } + block.text.replace("\n", " ")
+                        for (txt in cands) {
+                            val e = Dex.findByText(txt) ?: continue
+                            if (found == null || e.name.length > found!!.name.length) found = e
+                        }
+                    }
+                    crop.recycle(); onResult(found)
+                }
+                .addOnFailureListener { crop.recycle(); onResult(null) }
+        } catch (e: Exception) { crop.recycle(); onResult(null) }
     }
 
     /** Para o bot por conta própria e deixa o motivo no painel. */

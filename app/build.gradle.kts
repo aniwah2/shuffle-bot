@@ -37,3 +37,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    // leitura do nome do inimigo na tela (roda no próprio celular, sem internet)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}

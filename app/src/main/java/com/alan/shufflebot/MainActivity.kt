@@ -70,6 +70,11 @@ class MainActivity : Activity() {
             isChecked = prefs.waitStable
         }
         col.addView(stable)
+        val dex = CheckBox(this).apply {
+            text = "Usar a Shuffle Dex (reconhece seu time e o inimigo e joga pensando em tipo, habilidade e Mega)"
+            isChecked = prefs.useDex
+        }
+        col.addView(dex)
 
         col.addView(Button(this).apply {
             text = "Salvar ajustes"
@@ -80,6 +85,7 @@ class MainActivity : Activity() {
                 prefs.holdMs = v(hold, 40).coerceIn(0, 1000)
                 prefs.afterMoveMs = v(after, 0).coerceIn(0, 3000)
                 prefs.waitStable = stable.isChecked
+                prefs.useDex = dex.isChecked
                 Toast.makeText(this@MainActivity, "Salvo! Vale a partir do próximo ▶ Iniciar.", Toast.LENGTH_SHORT).show()
             }
         })

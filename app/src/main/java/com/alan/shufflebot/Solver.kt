@@ -34,6 +34,7 @@ object Solver {
     fun best(
         lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray,
         frozen: BooleanArray? = null, roles: Array<Role>? = null, empty: BooleanArray? = null,
+        value: SpeciesValue? = null,
     ): Move? {
         val total = n * n
         val fz = frozen ?: BooleanArray(total)
@@ -52,7 +53,7 @@ object Solver {
                 lab.copyInto(b); fz.copyInto(f)
                 if (toEmpty) { b[j] = lab[i]; b[i] = -5000 - i } else { b[i] = lab[j]; b[j] = lab[i] }
                 val firstWave = BooleanArray(total)
-                var s = simulate(b, f, n, roles, firstWave)
+                var s = simulate(b, f, n, roles, firstWave, value)
                 if (s <= 0) continue
                 if (toEmpty) s -= 5        // não é certeza que o jogo aceita; prefere trocas normais
                 if (best == null || s > best.score) {
@@ -64,7 +65,9 @@ object Solver {
     }
 
     /** Simula combinações + quedas + combos. Retorna a nota (0 = não combina nada). */
-    private fun simulate(b: IntArray, f: BooleanArray, n: Int, roles: Array<Role>?, firstWave: BooleanArray): Int {
+    private fun simulate(
+        b: IntArray, f: BooleanArray, n: Int, roles: Array<Role>?, firstWave: BooleanArray, value: SpeciesValue?,
+    ): Int {
         var score = 0f
         var unknown = -1000
         val matched = BooleanArray(n * n)
@@ -90,8 +93,14 @@ object Solver {
                             any = true
                             val role = roleOf(roles, sp)
                             for (t in 0 until len) matched[if (dir == 0) line * n + k + t else (k + t) * n + line] = true
-                            if (len == 4) waveScore += 15f * role.bigBonus
-                            if (len >= 5) waveScore += 40f * role.bigBonus
+                            val useDex = role == Role.NORMAL && value != null && sp < value.weight.size
+                            val bb = if (useDex) value!!.bigBonus[sp] else role.bigBonus
+                            if (len == 4) waveScore += 15f * bb
+                            if (len >= 5) waveScore += 40f * bb
+                            if (useDex) {
+                                val ki = minOf(len, 5) - 3
+                                waveScore += (value!!.dmgFactor[sp][ki] - 1f) * 10f * len * value.weight[sp] + value.flat[sp][ki]
+                            }
                         }
                         k += len
                     }
@@ -101,7 +110,8 @@ object Solver {
 
             for (p in matched.indices) if (matched[p]) {
                 val sp = b[p]
-                waveScore += 10f * roleOf(roles, sp).weight
+                val rl = roleOf(roles, sp)
+                waveScore += 10f * (if (rl == Role.NORMAL && value != null && sp >= 0 && sp < value.weight.size) value.weight[sp] else rl.weight)
                 if (f[p]) waveScore += 8f                     // quebra barreira
                 if (wave == 0) firstWave[p] = true
                 // peças "lisas" (bloco/pedra) ao lado da combinação costumam quebrar
