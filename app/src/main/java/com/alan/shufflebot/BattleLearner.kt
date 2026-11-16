@@ -28,19 +28,21 @@ class BattleLearner(private val reader: BoardReader, val knownThr: Float = 20f) 
             cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
         val looks = reader.speciesLook(view, feats)
         val poke = ArrayList<FloatArray>(); val names = HashSet<String>(); val other = ArrayList<FloatArray>()
-        var strong = 0
         for ((sp, look) in looks) {
             val c = cnt[sp] ?: 0
             if (c < 2) continue
             val e = Dex.identify(look)
-            if (e != null) { poke.add(look); names.add(e.baseName); if (c >= 3) strong++ }
+            if (e != null) { poke.add(look); if (c >= 3) names.add(e.baseName) }
             else if (c >= 3) other.add(look)
         }
+        val strong = names.size
         if (strong < 2 || view.empty > 6) {
             lastReason = "Pokémon reconhecidos: $strong de 2"
             prevNames = null; dexStreak = 0; return emptyList()
         }
-        dexStreak = if (prevNames == names) dexStreak + 1 else 0
+        // confirma se pelo menos 2 dos mesmos Pokémon aparecem no print anterior (nuvens/efeitos mudam o resto)
+        val pn = prevNames
+        dexStreak = if (pn != null && names.count { it in pn } >= 2) dexStreak + 1 else 0
         prevNames = names
         lastReason = "vi ${names.joinToString()} (confirmando)"
         if (dexStreak < 1) return emptyList()

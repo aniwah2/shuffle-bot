@@ -506,7 +506,13 @@ class BotService : AccessibilityService() {
 
             // 2) ainda não sabe quais Pokémon são desta batalha: aprende com um tabuleiro claro e parado
             if (known.isEmpty()) {
-                val learned = if (useDex) learner.tryLearnDex(view, feats) else learner.tryLearn(view, feats)
+                // Dex primeiro (aguenta muita disrupção); a regra antiga, também segura contra menus, fica de reserva
+                var learned = if (useDex) learner.tryLearnDex(view, feats) else emptyList()
+                if (learned.isEmpty() && known.isEmpty()) {
+                    val dexReason = learner.lastReason
+                    learned = learner.tryLearn(view, feats)
+                    if (learned.isEmpty() && useDex) learner.lastReason = "$dexReason / ${learner.lastReason}"
+                }
                 for (l in learned) knownEntry.add(if (useDex) Dex.identify(l) else null)
                 if (known.isEmpty()) {
                     if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }

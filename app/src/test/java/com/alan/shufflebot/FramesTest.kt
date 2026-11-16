@@ -114,7 +114,9 @@ class FramesTest {
         val l = BattleLearner(r)
         for (n in listOf("v8_a", "v8_b", "v8_c", "v8_a", "v8_b")) {
             val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
-            val f = r.features(img, g)!!; l.tryLearnDex(r.analyze(f, 15f, r.frozenByBorder(img, g)), f)
+            val f = r.features(img, g)!!; val v0 = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            if (l.known.isEmpty()) { if (l.tryLearnDex(v0, f).isEmpty() && l.known.isEmpty()) l.tryLearn(v0, f) }
+            println("[nuvem] $n -> ${l.lastReason} (aprendidos ${l.known.size})")
         }
         println("[nuvem] aprendeu ${l.known.size} Pokémon / ${l.disrupt.size} disrupções: ${l.lastReason}")
         val img = load("v8_nuvem.png"); val g = BoardGeom.guess(img.width, img.height)
