@@ -117,6 +117,11 @@ class FramesTest {
             val f = r.features(img, g)!!; val v0 = r.analyze(f, 15f, r.frozenByBorder(img, g))
             if (l.known.isEmpty()) { if (l.tryLearnDex(v0, f).isEmpty() && l.known.isEmpty()) l.tryLearn(v0, f) }
             println("[nuvem] $n -> ${l.lastReason} (aprendidos ${l.known.size})")
+            val cnt = HashMap<Int, Int>(); val mov = HashMap<Int, Int>()
+            for (i in 0 until 36) if (v0.species[i] >= 0) { cnt[v0.species[i]] = (cnt[v0.species[i]] ?: 0) + 1; if (v0.movable[i]) mov[v0.species[i]] = (mov[v0.species[i]] ?: 0) + 1 }
+            val looks = r.speciesLook(v0, f)
+            println("[nuvem]    espécies: " + cnt.entries.sortedBy { -it.value }.joinToString { (sp, c) -> "$sp: $c casas (${mov[sp] ?: 0} livres) = ${looks[sp]?.let { Dex.identify(it)?.name } ?: "?"}" } +
+                " | gelo=${v0.frozen.count { it }} blocos=${v0.blocks} vazias=${v0.empty}")
         }
         println("[nuvem] aprendeu ${l.known.size} Pokémon / ${l.disrupt.size} disrupções: ${l.lastReason}")
         val img = load("v8_nuvem.png"); val g = BoardGeom.guess(img.width, img.height)
