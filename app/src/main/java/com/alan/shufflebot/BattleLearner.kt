@@ -27,17 +27,19 @@ class BattleLearner(private val reader: BoardReader, val knownThr: Float = 20f) 
         for (i in view.species.indices) if ((view.movable[i] || view.frozen[i]) && view.species[i] >= 0)
             cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
         val looks = reader.speciesLook(view, feats)
-        val poke = ArrayList<FloatArray>(); val names = HashSet<String>(); val other = ArrayList<FloatArray>()
+        val poke = ArrayList<FloatArray>(); val other = ArrayList<FloatArray>()
+        val cellsByName = HashMap<String, Int>()   // soma por NOME (nuvens/efeitos dividem a mesma espécie em grupos)
         for ((sp, look) in looks) {
             val c = cnt[sp] ?: 0
-            if (c < 2) continue
             val e = Dex.identify(look)
-            if (e != null) { poke.add(look); if (c >= 3) names.add(e.baseName) }
+            if (e != null) { poke.add(look); cellsByName[e.baseName] = (cellsByName[e.baseName] ?: 0) + c }
             else if (c >= 3) other.add(look)
         }
-        val strong = names.size
-        if (strong < 2 || view.empty > 6) {
-            lastReason = "Pokémon reconhecidos: $strong de 2"
+        val strong = cellsByName.count { it.value >= 3 }
+        val names = cellsByName.filter { it.value >= 2 }.keys
+        // menus/captura: cada Pokémon aparece no máximo em 1 casa → nunca passa
+        if ((strong < 2 && names.size < 3) || view.empty > 6) {
+            lastReason = "Pokémon reconhecidos: ${names.size} (${names.joinToString()})"
             prevNames = null; dexStreak = 0; return emptyList()
         }
         // confirma se pelo menos 2 dos mesmos Pokémon aparecem no print anterior (nuvens/efeitos mudam o resto)

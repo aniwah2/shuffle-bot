@@ -126,12 +126,18 @@ class FramesTest {
         println("[nuvem] aprendeu ${l.known.size} Pokémon / ${l.disrupt.size} disrupções: ${l.lastReason}")
         val img = load("v8_nuvem.png"); val g = BoardGeom.guess(img.width, img.height)
         val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
-        val knownFree = BooleanArray(36) { v.movable[it] && l.isKnown(f[it]) }
+        val spName = HashMap<Int, String>()
+        for ((sp, look) in r.speciesLook(v, f)) Dex.identify(look)?.let { spName[sp] = it.baseName }
+        val teamNames = l.known.mapNotNull { Dex.identify(it)?.baseName }.toHashSet()
+        println("[nuvem] time: $teamNames")
+        val knownFree = BooleanArray(36) { v.movable[it] && (l.isKnown(f[it]) || spName[v.species[it]]?.let { n -> n in teamNames } == true) }
+        val canon = HashMap<Int, Int>(); val first = HashMap<String, Int>()
+        for ((sp, n) in spName) canon[sp] = first.getOrPut(n) { sp }
         val sb = StringBuilder()
         for (row in 0 until 6) { sb.append("    "); for (c in 0 until 6) { val i = row * 6 + c
-            sb.append(if (knownFree[i]) String.format("%3d", v.species[i]) else "  .") }; sb.append('\n') }
+            sb.append(if (knownFree[i]) String.format("%3d", canon[v.species[i]] ?: v.species[i]) else "  .") }; sb.append('\n') }
         print("[nuvem] casas que o bot pode mexer (. = nuvem/caixote/desconhecido):\n$sb")
-        val sp = IntArray(36) { if (knownFree[it]) v.species[it] else -(it + 1) }
+        val sp = IntArray(36) { if (knownFree[it]) (canon[v.species[it]] ?: v.species[it]) else -(it + 1) }
         val mv = Solver.best(sp, 6, emptySet(), BooleanArray(36) { !knownFree[it] })
         println("[nuvem] jogada escolhida: $mv")
     }

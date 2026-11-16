@@ -534,7 +534,13 @@ class BotService : AccessibilityService() {
             // 3) é mesmo o tabuleiro desta batalha?
             // casas reconhecidas: Pokémon livres conhecidos + congelados dessas mesmas espécies.
             // Blocos não contam a favor nem contra (fases com muitos blocos).
-            val knownFree = BooleanArray(total) { view.movable[it] && isKnown(feats[it]) }
+            // Nome (pela Dex) de cada espécie desta tela, e quais nomes são do time desta batalha
+            val spName = HashMap<Int, String>()
+            if (useDex) for ((sp, look) in reader.speciesLook(view, feats)) Dex.identify(look)?.let { spName[sp] = it.baseName }
+            val teamNames = knownEntry.mapNotNull { it?.baseName }.toHashSet()
+            val knownFree = BooleanArray(total) {
+                view.movable[it] && (isKnown(feats[it]) || (spName[view.species[it]]?.let { n -> n in teamNames } == true))
+            }
             val knownSpecies = (0 until total).filter { knownFree[it] }.map { view.species[it] }.toHashSet()
             val knownFreeCount = knownFree.count { it }
             val recognized = (0 until total).count { knownFree[it] || (view.frozen[it] && (view.species[it] in knownSpecies || border?.get(it) == true)) }
@@ -625,9 +631,12 @@ class BotService : AccessibilityService() {
             // Só mexe em casas onde reconhece um Pokémon desta batalha. Nuvem, caixote, bloco, o botão do gravador
             // de tela ou qualquer outra coisa por cima ficam de fora (nem arrasta, nem conta como combinação).
             val blocked = BooleanArray(total) { !knownFree[it] || !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
+            // o mesmo Pokémon dividido em grupos (nuvem/efeito) vira uma espécie só, para combinar entre si
+            val canon = HashMap<Int, Int>(); val firstByName = HashMap<String, Int>()
+            for ((sp, n) in spName) { val f0 = firstByName.getOrPut(n) { sp }; canon[sp] = f0 }
             val solverSpecies = IntArray(total) { i ->
                 val sp = view.species[i]
-                if (sp >= 0 && (knownFree[i] || (view.frozen[i] && sp in knownSpecies))) sp else -(i + 1)
+                if (sp >= 0 && (knownFree[i] || (view.frozen[i] && sp in knownSpecies))) (canon[sp] ?: sp) else -(i + 1)
             }
             val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
             var value: SpeciesValue? = null
