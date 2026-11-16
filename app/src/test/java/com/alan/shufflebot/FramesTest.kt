@@ -158,6 +158,7 @@ class FramesTest {
     }
 
     @Test fun roserade_semJogada() {
+        val adopted = HashSet<String>()
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val r = BoardReader(); val l = BattleLearner(r)
         for (n in listOf("v13_023", "v13_025", "v13_023")) {
@@ -166,6 +167,16 @@ class FramesTest {
             if (l.known.isEmpty()) { if (l.tryLearnDex(v0, f).isEmpty() && l.known.isEmpty()) l.tryLearn(v0, f) }
         }
         val team = l.known.mapNotNull { Dex.identify(it)?.baseName }.toHashSet()
+        // mesma regra do bot: nome da Dex com 2+ casas em 2 prints seguidos entra no time
+        for (n in listOf("v13_041", "v13_041")) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            val cnt = HashMap<Int, Int>()
+            for (i in 0 until 36) if ((v.movable[i] || v.frozen[i]) && v.species[i] >= 0) cnt[v.species[i]] = (cnt[v.species[i]] ?: 0) + 1
+            for ((sp, look) in r.speciesLook(v, f)) { val e = Dex.identify(look) ?: continue
+                if (e.baseName !in team && (cnt[sp] ?: 0) >= 2 && !l.isDisrupt(look)) { if (n == "v13_041" && adopted.add(e.baseName) ) Unit else team.add(e.baseName) } }
+        }
+        team.addAll(adopted)
         println("[rose] aprendeu ${l.known.size}: $team — ${l.lastReason}")
         for (n in listOf("v13_041", "v13_055", "v13_069", "v13_079")) {
             val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)

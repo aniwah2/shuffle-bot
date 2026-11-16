@@ -448,6 +448,7 @@ class BotService : AccessibilityService() {
         // ---- Pokémon DESTA batalha. Só joga se a maior parte das casas forem eles.
         // (Chão do cenário, Pokébola, janela da Great Ball etc. não batem com nenhum e o bot não toca.)
         val learner = BattleLearner(reader)
+        val adoptName = HashMap<String, Int>()
         val known = learner.known
         val knownThr = learner.knownThr
         fun isKnown(f: FloatArray) = learner.isKnown(f)
@@ -634,6 +635,23 @@ class BotService : AccessibilityService() {
             // Pokémon novos que apareçam no meio da batalha (disruptions) entram na lista
             if (known.size < 12) for (l in freeLooks(view, feats, 3)) if (!isKnown(l)) {
                 known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
+            }
+            // Pokémon que a Dex reconhece no tabuleiro (2+ casas) mas que ainda não estão no time do bot
+            // (ex.: Roselia que começou com poucas peças): visto em 2 prints seguidos → passa a poder mexer.
+            if (useDex && known.size < 16) {
+                val cnt = HashMap<Int, Int>()
+                for (i in 0 until total) if ((view.movable[i] || view.frozen[i]) && view.species[i] >= 0)
+                    cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
+                val seen = HashSet<String>()
+                for ((sp, look) in reader.speciesLook(view, feats)) {
+                    val e = Dex.identify(look) ?: continue
+                    if (e.baseName in teamNames || (cnt[sp] ?: 0) < 2 || learner.isDisrupt(look)) continue
+                    seen.add(e.baseName)
+                    val c = (adoptName[e.baseName] ?: 0) + 1
+                    adoptName[e.baseName] = c
+                    if (c >= 2) { known.add(look); knownEntry.add(e); teamNames.add(e.baseName); adoptName.remove(e.baseName) }
+                }
+                adoptName.keys.retainAll(seen)
             }
 
             // 4) a última jogada pegou no jogo? Espera a REAÇÃO do jogo (tabuleiro mudar), não um tempo fixo:
