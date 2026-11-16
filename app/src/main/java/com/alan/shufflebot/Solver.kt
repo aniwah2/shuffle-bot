@@ -12,7 +12,7 @@ fun pairKey(a: Int, b: Int): Long = minOf(a, b).toLong() * 1000 + maxOf(a, b)
  */
 object Solver {
 
-    fun best(lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray): Move? {
+    fun best(lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray, frozen: BooleanArray? = null): Move? {
         val b = lab.copyOf()
         var best: Move? = null
         val total = n * n
@@ -29,7 +29,7 @@ object Solver {
 
                 if (atJ.isEmpty() && atI.isEmpty()) continue
                 val cells = HashSet<Int>().apply { addAll(atJ); addAll(atI) }
-                val s = score(cells, atJ.size, atI.size, n)
+                val s = score(cells, atJ.size, atI.size, n) + (if (frozen != null) cells.count { frozen[it] } * 8 else 0)
                 if (best == null || s > best.score) {
                     // arrasta a peça que forma a combinação no destino
                     best = if (atJ.size >= atI.size) Move(i, j, s) else Move(j, i, s)

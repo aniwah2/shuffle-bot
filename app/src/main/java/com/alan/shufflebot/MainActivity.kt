@@ -43,7 +43,7 @@ class MainActivity : Activity() {
             "2. Abra o Pokémon Shuffle e entre numa fase.\n" +
             "3. No painel flutuante, toque em \"Calibrar\", encaixe a grade verde nas 6x6 casas (arraste pelo meio, redimensione pela bolinha amarela) e toque em \"Salvar grade\".\n" +
             "4. Arraste o painel para fora do tabuleiro e toque em \"▶ Iniciar\".\n\n" +
-            "O painel mostra quantos tipos de peça ele está vendo. Se o número estiver maior que o real, aumente a tolerância; se estiver menor (confundindo Pokémon parecidos), diminua."
+            "O painel mostra quantos tipos de peça ele está vendo. Se o número estiver maior que o real, aumente a tolerância um pouco (16–18); se estiver menor (confundindo Pokémon parecidos), diminua (12–13). Na dúvida, toque em 📷 no painel e veja o print salvo na Galeria."
         ))
 
         col.addView(Button(this).apply {
@@ -61,7 +61,7 @@ class MainActivity : Activity() {
                 col.addView(this)
             }
         }
-        val thr = numberField("Tolerância para \"mesmo Pokémon\" (padrão 28)", prefs.threshold)
+        val thr = numberField("Tolerância para \"mesmo Pokémon\" (padrão 15)", prefs.threshold)
         val move = numberField("Duração do arrasto em ms (padrão 120; mínimo seguro ~60)", prefs.moveMs)
         val hold = numberField("Segurar antes/depois do arrasto em ms (padrão 40; 0 = desliga)", prefs.holdMs)
         val after = numberField("Pausa depois de cada jogada em ms (padrão 150)", prefs.afterMoveMs)
@@ -75,7 +75,7 @@ class MainActivity : Activity() {
             text = "Salvar ajustes"
             setOnClickListener {
                 fun v(e: EditText, d: Int) = e.text.toString().toIntOrNull() ?: d
-                prefs.threshold = v(thr, 28).coerceIn(5, 120)
+                prefs.threshold = v(thr, 15).coerceIn(5, 60)
                 prefs.moveMs = v(move, 120).coerceIn(30, 2000)
                 prefs.holdMs = v(hold, 40).coerceIn(0, 1000)
                 prefs.afterMoveMs = v(after, 150).coerceIn(0, 3000)

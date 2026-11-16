@@ -18,7 +18,20 @@ data class BoardGeom(val left: Int, val top: Int, val size: Int, val n: Int = 6)
  * Lê o tabuleiro sem precisar conhecer os Pokémon: cada casa vira uma "assinatura" de cores
  * (grade 4x4 de médias RGB do miolo da casa), e casas com assinaturas parecidas são o mesmo tipo.
  */
-class BoardReader(private val blocks: Int = 4, private val inset: Float = 0.18f) {
+/** O que o bot entendeu do tabuleiro. */
+class BoardView(
+    /** Espécie de cada casa (congelado = mesma espécie do livre). Bloco/vazio = número negativo único (nunca combina). */
+    val species: IntArray,
+    /** Pode ser arrastada? (não: bloco, casa vazia, congelado) */
+    val movable: BooleanArray,
+    val frozen: BooleanArray,
+    val blocks: Int,
+    val empty: Int,
+) {
+    val types: Int get() = species.filter { it >= 0 }.distinct().size
+}
+
+class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f) {
 
     fun features(bmp: Bitmap, g: BoardGeom): Array<FloatArray>? {
         if (g.size <= 0 || g.left < 0 || g.top < 0 ||
@@ -107,24 +120,132 @@ class BoardReader(private val blocks: Int = 4, private val inset: Float = 0.18f)
         return if (n == 0) 0f else s / n
     }
 
+    // ------------------------------------------------------------------ análise completa
+
     /**
-     * Confere se os rótulos parecem um tabuleiro de verdade: poucos tipos, todos repetidos várias vezes
-     * e nenhum dominando (um fundo liso de menu/janela vira um "tipo" gigante).
-     * Retorna null se estiver ok, ou o motivo se não estiver.
+     * Agrupa as casas, reconhece blocos/casas vazias e liga cada Pokémon congelado (barreira)
+     * à espécie livre correspondente — no jogo, congelados combinam com os livres da mesma espécie.
      */
-    fun boardProblem(labels: IntArray): String? {
-        val counts = IntArray((labels.maxOrNull() ?: 0) + 1)
-        for (l in labels) counts[l]++
+    fun analyze(feats: Array<FloatArray>, thr: Float): BoardView {
+        val lab = cluster(feats, thr)
+        val k = (lab.maxOrNull() ?: 0) + 1
+        val dim = feats[0].size
+        val reps = Array(k) { FloatArray(dim) }
+        val cnt = IntArray(k)
+        for (i in feats.indices) { cnt[lab[i]]++; for (j in 0 until dim) reps[lab[i]][j] += feats[i][j] }
+        for (c in 0 until k) for (j in 0 until dim) reps[c][j] /= cnt[c].coerceAtLeast(1)
+
+        val nb = dim / 3
+        val bright = FloatArray(k)
+        val kind = IntArray(k)          // 0 livre, 1 congelado, 2 bloco, 3 vazio
+        for (c in 0 until k) {
+            val r = reps[c]
+            var sum = 0f; var satSum = 0f
+            val lum = FloatArray(nb)
+            for (b in 0 until nb) {
+                val R = r[b * 3]; val G = r[b * 3 + 1]; val B = r[b * 3 + 2]
+                lum[b] = (R + G + B) / 3f; sum += lum[b]
+                satSum += maxOf(R, G, B) - minOf(R, G, B)
+            }
+            val mean = sum / nb
+            var v = 0f
+            for (b in 0 until nb) v += (lum[b] - mean) * (lum[b] - mean)
+            val std = kotlin.math.sqrt(v / nb)
+            bright[c] = mean
+            kind[c] = when {
+                std < 5f -> 3
+                satSum / nb < 12f && std < 20f -> 2
+                else -> 0
+            }
+        }
+
+        val spOf = IntArray(k) { it }
+        val base = kind.copyOf()
+        for (c in 0 until k) {
+            if (base[c] != 0) continue
+            var bestR = Float.MAX_VALUE; var bestJ = -1
+            for (j in 0 until k) {
+                if (j == c || base[j] != 0 || bright[c] < bright[j] + 12f) continue
+                val r = robustFit(reps[c], reps[j])
+                if (r < 19f && r < bestR) { bestR = r; bestJ = j }
+            }
+            if (bestJ >= 0) { kind[c] = 1; spOf[c] = bestJ }
+        }
+
+        val n = feats.size
+        val species = IntArray(n)
+        val movable = BooleanArray(n)
+        val frozen = BooleanArray(n)
+        var nBlocks = 0; var nEmpty = 0
+        for (i in 0 until n) {
+            when (kind[lab[i]]) {
+                0 -> { species[i] = spOf[lab[i]]; movable[i] = true }
+                1 -> { species[i] = spOf[lab[i]]; frozen[i] = true }
+                2 -> { species[i] = -(i + 1); nBlocks++ }
+                else -> { species[i] = -(i + 1); nEmpty++ }
+            }
+        }
+        return BoardView(species, movable, frozen, nBlocks, nEmpty)
+    }
+
+    /**
+     * Quão bem "fz" é uma versão esbranquiçada de "fr" (fz ≈ a·fr + b por canal),
+     * ignorando os 25% piores pontos (a faixa branca do gelo). Menor = mais parecido.
+     */
+    private fun robustFit(fz: FloatArray, fr: FloatArray): Float {
+        val nb = fz.size / 3
+        val x = FloatArray(nb); val y = FloatArray(nb); val res = FloatArray(nb)
+        var total = 0f
+        for (ch in 0 until 3) {
+            for (b in 0 until nb) { x[b] = fr[b * 3 + ch]; y[b] = fz[b * 3 + ch] }
+            var (a, c) = linFit(x, y, null)
+            for (b in 0 until nb) res[b] = abs(y[b] - (a * x[b] + c))
+            val cut = percentile(res, 0.75f)
+            val keep = BooleanArray(nb) { res[it] <= cut }
+            val f2 = linFit(x, y, keep); a = f2.first; c = f2.second
+            for (b in 0 until nb) res[b] = abs(y[b] - (a * x[b] + c))
+            total += percentile(res, 0.75f)
+        }
+        return total / 3
+    }
+
+    private fun linFit(x: FloatArray, y: FloatArray, keep: BooleanArray?): Pair<Float, Float> {
+        var n = 0; var sx = 0f; var sy = 0f
+        for (i in x.indices) if (keep == null || keep[i]) { n++; sx += x[i]; sy += y[i] }
+        if (n < 2) return Pair(1f, 0f)
+        val mx = sx / n; val my = sy / n
+        var cov = 0f; var vx = 0f
+        for (i in x.indices) if (keep == null || keep[i]) {
+            cov += (x[i] - mx) * (y[i] - my); vx += (x[i] - mx) * (x[i] - mx)
+        }
+        val a = if (vx < 1e-3f) 0.05f else (cov / vx).coerceAtLeast(0.05f)
+        return Pair(a, my - a * mx)
+    }
+
+    private fun percentile(v: FloatArray, q: Float): Float {
+        val s = v.sortedArray()
+        val pos = (s.size - 1) * q
+        val lo = pos.toInt()
+        val hi = minOf(lo + 1, s.size - 1)
+        return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+    }
+
+    /**
+     * Confere se parece um tabuleiro de verdade. Retorna null se ok, ou o motivo.
+     */
+    fun boardProblem(v: BoardView): String? {
+        val counts = HashMap<Int, Int>()
+        for (sp in v.species) if (sp >= 0) counts[sp] = (counts[sp] ?: 0) + 1
+        val n = v.species.size
         val types = counts.size
-        val singles = counts.count { it <= 1 }
-        val biggest = counts.maxOrNull() ?: 0
-        val solid = counts.count { it >= 4 }
+        val singles = counts.values.count { it <= 1 }
+        val biggest = counts.values.maxOrNull() ?: 0
         return when {
-            types < 3 -> "poucos tipos ($types)"
-            types > 14 -> "tipos demais ($types)"
-            singles > 7 -> "muitas peças soltas"
-            biggest > labels.size * 0.6f -> "área lisa grande (janela/menu?)"
-            solid < 2 -> "tipos pouco repetidos"
+            v.blocks + v.empty > n * 0.75f -> "quase tudo liso (janela/menu?)"
+            types < 2 -> "poucos tipos ($types)"
+            types > 12 -> "tipos demais ($types)"
+            singles > 6 -> "muitas peças soltas"
+            biggest > n * 0.6f -> "área repetida grande (janela/menu?)"
             else -> null
         }
     }

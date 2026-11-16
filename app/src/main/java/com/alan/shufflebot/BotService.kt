@@ -326,8 +326,8 @@ class BotService : AccessibilityService() {
             unstable = 0
 
             // 2) parece mesmo o tabuleiro?
-            val labels = reader.cluster(feats, prefs.threshold.toFloat())
-            val problem = reader.boardProblem(labels)
+            val view = reader.analyze(feats, prefs.threshold.toFloat())
+            val problem = reader.boardProblem(view)
             if (problem != null) { if (bad(problem)) return; Thread.sleep(150); continue }
 
             val light = reader.brightness(feats)
@@ -357,9 +357,9 @@ class BotService : AccessibilityService() {
             }
 
             // 4) escolher e fazer a jogada
-            val types = (labels.maxOrNull() ?: 0) + 1
-            val blocked = BooleanArray(total) { cellFails[it] >= 1 || unmovable(feats[it]) }
-            val mv = Solver.best(labels, g.n, failed, blocked)
+            val types = view.types
+            val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) }
+            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
                 // talvez tenha bloqueado demais: libera as casas (mas mantém o que aprendeu sobre pedras)
@@ -368,7 +368,12 @@ class BotService : AccessibilityService() {
             }
 
             moves++
-            status("Jogando • $types tipos • jogada $moves")
+            val extra = buildString {
+                if (view.blocks > 0) append(" • ${view.blocks} blocos")
+                val fz = view.frozen.count { it }
+                if (fz > 0) append(" • $fz no gelo")
+            }
+            status("Jogando • $types tipos$extra • jogada $moves")
             beforeMove = feats
             lastMove = mv
             drag(g.center(mv.from), g.center(mv.to), prefs)
@@ -408,13 +413,20 @@ class BotService : AccessibilityService() {
             if (feats == null) {
                 lines.add("Grade fora da tela")
             } else {
-                val labels = reader.cluster(feats, prefs.threshold.toFloat())
-                val types = (labels.maxOrNull() ?: 0) + 1
-                lines.add("tipos: $types  •  brilho: ${reader.brightness(feats).toInt()}  •  tolerância: ${prefs.threshold}")
-                lines.add("diagnóstico: ${reader.boardProblem(labels) ?: "tabuleiro OK"}")
-                val mv = Solver.best(labels, g.n, emptySet(), BooleanArray(g.n * g.n))
-                for (i in labels.indices) {
-                    val col = palette[labels[i] % palette.size]
+                val view = reader.analyze(feats, prefs.threshold.toFloat())
+                val fz = view.frozen.count { it }
+                lines.add("tipos: ${view.types} • blocos: ${view.blocks} • gelo: $fz • vazias: ${view.empty} • tolerância: ${prefs.threshold}")
+                lines.add("diagnóstico: ${reader.boardProblem(view) ?: "tabuleiro OK"} • brilho ${reader.brightness(feats).toInt()}")
+                val blockedNow = BooleanArray(g.n * g.n) { !view.movable[it] }
+                val mv = Solver.best(view.species, g.n, emptySet(), blockedNow, view.frozen)
+                for (i in view.species.indices) {
+                    val sp = view.species[i]
+                    val label = when {
+                        sp < 0 -> "■"
+                        view.frozen[i] -> "${sp}❄"
+                        else -> sp.toString()
+                    }
+                    val col = if (sp < 0) Color.GRAY else palette[sp % palette.size]
                     val r = i / g.n
                     val cc = i % g.n
                     val x0 = g.left + cc * g.cell
@@ -423,9 +435,9 @@ class BotService : AccessibilityService() {
                     c.drawRect(x0 + 2, y0 + 2, x0 + g.cell - 2, y0 + g.cell - 2, box)
                     val cx = x0 + g.cell / 2
                     val cy = y0 + g.cell / 2
-                    c.drawCircle(cx, cy - 5 * d, 13 * d, bg)
+                    c.drawCircle(cx, cy - 5 * d, 15 * d, bg)
                     txt.color = col
-                    c.drawText(labels[i].toString(), cx, cy, txt)
+                    c.drawText(label, cx, cy, txt)
                 }
                 if (mv != null) {
                     val a = g.center(mv.from)
