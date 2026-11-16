@@ -315,10 +315,25 @@ class BotService : AccessibilityService() {
 
     // ---------------------------------------------------------------- loop principal
 
+    /** Ajusta a grade automaticamente e salva o resultado. */
+    private fun autoFit(prefs: Prefs, g0: BoardGeom, reader: BoardReader): BoardGeom {
+        status("🔍 Ajustando a grade…")
+        val shot = screenshot() ?: return g0
+        val g = runCatching { reader.fitGrid(shot, g0, prefs.threshold.toFloat()) }.getOrDefault(g0)
+        shot.recycle()
+        if (g != g0) {
+            prefs.frameX = (if (prefs.frameX >= 0) prefs.frameX else g0.left) + (g.left - g0.left)
+            prefs.frameY = (if (prefs.frameY >= 0) prefs.frameY else g0.top) + (g.top - g0.top)
+            prefs.boardLeft = g.left; prefs.boardTop = g.top; prefs.boardSize = g.size
+        }
+        return g
+    }
+
     private fun botLoop() {
         val prefs = Prefs(this)
-        val g = prefs.geom() ?: return
         val reader = BoardReader()
+        var g = autoFit(prefs, prefs.geom() ?: return, reader)
+        var lastFit = System.currentTimeMillis()
         val total = g.n * g.n
 
         val team = prefs.team
@@ -386,7 +401,15 @@ class BotService : AccessibilityService() {
             // 2) parece mesmo o tabuleiro?
             val view = reader.analyze(feats, prefs.threshold.toFloat())
             val problem = reader.boardProblem(view)
-            if (problem != null) { if (bad(problem)) return; Thread.sleep(150); continue }
+            if (problem != null) {
+                // pode ser a grade desalinhada: tenta reajustar (no máximo a cada 20 s)
+                val now = System.currentTimeMillis()
+                if (badSince != 0L && now - badSince > 2500 && now - lastFit > 20_000) {
+                    g = autoFit(prefs, g, reader); lastFit = now; prev = null
+                    continue
+                }
+                if (bad(problem)) return; Thread.sleep(150); continue
+            }
 
             val light = reader.brightness(feats)
             if (baseline < 0) baseline = light

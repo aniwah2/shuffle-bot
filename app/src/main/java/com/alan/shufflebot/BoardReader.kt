@@ -286,4 +286,99 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
         }
         return roles
     }
+
+    // ------------------------------------------------------------------ ajuste automático da grade
+
+    /**
+     * Procura a posição/tamanho de grade em que as casas ficam mais "organizadas"
+     * (menos tipos diferentes e peças iguais bem parecidas). Corrige calibração imprecisa.
+     */
+    fun fitGrid(bmp: Bitmap, g: BoardGeom, thr: Float): BoardGeom {
+        val W = bmp.width
+        val H = bmp.height
+        val px = IntArray(W * H)
+        bmp.getPixels(px, 0, W, 0, 0, W, H)
+
+        fun score(l: Float, t: Float, sz: Float, stride: Int): Float {
+            if (l < 0 || t < 0 || l + sz > W || t + sz > H) return Float.MAX_VALUE
+            val f = sample(px, W, l, t, sz, g.n, stride)
+            val lab = cluster(f, thr)
+            val k = (lab.maxOrNull() ?: 0) + 1
+            val dim = f[0].size
+            val reps = Array(k) { FloatArray(dim) }
+            val cnt = IntArray(k)
+            for (i in f.indices) { cnt[lab[i]]++; for (j in 0 until dim) reps[lab[i]][j] += f[i][j] }
+            for (c in 0 until k) { val m = cnt[c].toFloat(); for (j in 0 until dim) reps[c][j] = reps[c][j] / m }
+            var intra = 0f
+            for (i in f.indices) intra += dist(f[i], reps[lab[i]])
+            return k + intra / f.size / 10f
+        }
+
+        val L = g.left.toFloat(); val T = g.top.toFloat(); val S = g.size.toFloat()
+        var bestS = score(L, T, S, 3); var bL = L; var bT = T; var bSz = S
+        var k = -0.15f
+        while (k <= 0.1501f) {
+            val sz = S * (1 + k); val cs = sz / g.n
+            var ox = -0.5f
+            while (ox <= 0.501f) {
+                var oy = -0.5f
+                while (oy <= 0.501f) {
+                    val l = L + (S - sz) / 2 + ox * cs
+                    val t = T + (S - sz) / 2 + oy * cs
+                    val sc = score(l, t, sz, 3)
+                    if (sc < bestS) { bestS = sc; bL = l; bT = t; bSz = sz }
+                    oy += 0.125f
+                }
+                ox += 0.125f
+            }
+            k += 0.015f
+        }
+        // refino fino com todos os pixels
+        val L0 = bL; val T0 = bT; val S0 = bSz
+        bestS = score(L0, T0, S0, 1)
+        for (kk in -4..4) {
+            val sz = S0 * (1 + kk * 0.0025f)
+            for (dx in -1..1) for (dy in -1..1) {
+                val l = L0 + (S0 - sz) / 2 + dx * 0.06f * sz / g.n
+                val t = T0 + (S0 - sz) / 2 + dy * 0.06f * sz / g.n
+                val sc = score(l, t, sz, 1)
+                if (sc < bestS) { bestS = sc; bL = l; bT = t; bSz = sz }
+            }
+        }
+        return BoardGeom(bL.toInt(), bT.toInt(), bSz.toInt(), g.n)
+    }
+
+    /** Mesmo cálculo de features(), direto do array de pixels, pulando "stride" pixels (mais rápido). */
+    private fun sample(px: IntArray, W: Int, l: Float, t: Float, sz: Float, n: Int, stride: Int): Array<FloatArray> {
+        val cs = sz / n
+        val w = (cs * (1 - 2 * inset)).toInt().coerceAtLeast(blocks)
+        return Array(n * n) { i ->
+            val r = i / n; val c = i % n
+            val x0 = (l + c * cs + cs * inset).toInt()
+            val y0 = (t + r * cs + cs * inset).toInt()
+            val f = FloatArray(blocks * blocks * 3)
+            val cnt = IntArray(blocks * blocks)
+            var yy = 0
+            while (yy < w) {
+                val by = yy * blocks / w
+                val row = (y0 + yy) * W + x0
+                var xx = 0
+                while (xx < w) {
+                    val b = by * blocks + xx * blocks / w
+                    val col = px[row + xx]
+                    f[b * 3] += ((col shr 16) and 0xFF).toFloat()
+                    f[b * 3 + 1] += ((col shr 8) and 0xFF).toFloat()
+                    f[b * 3 + 2] += (col and 0xFF).toFloat()
+                    cnt[b]++
+                    xx += stride
+                }
+                yy += stride
+            }
+            for (b in 0 until blocks * blocks) {
+                val m = cnt[b].coerceAtLeast(1).toFloat()
+                f[b * 3] = f[b * 3] / m; f[b * 3 + 1] = f[b * 3 + 1] / m; f[b * 3 + 2] = f[b * 3 + 2] / m
+            }
+            f
+        }
+    }
 }
