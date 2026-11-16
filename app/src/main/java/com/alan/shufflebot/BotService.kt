@@ -386,6 +386,8 @@ class BotService : AccessibilityService() {
         val useDex = prefs.useDex && runCatching { Dex.load(this) }.isSuccess
         val knownEntry = ArrayList<DexEntry?>()           // mesma ordem de "known"
         val opponentRef = java.util.concurrent.atomic.AtomicReference<DexEntry?>(null)
+        val endWordRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        var lastEndOcr = 0L
         var ocrTries = 0
         var lastOcr = 0L
         var emptyFails = 0; var emptyOk = 0
@@ -523,13 +525,25 @@ class BotService : AccessibilityService() {
 
                 if (lostSince == 0L) lostSince = now
                 lastMove = null; beforeMove = null
-                if (moves > 0 && now - lostSince > 6000) {
-                    autoStop("✅ Batalha terminou. Toque ▶ na próxima"); return
+                // Fim de batalha = o jogo ESCREVEU isso na tela (CLEAR!, GAME OVER, Catchability…).
+                // Combo grande ou efeito na tela só pausa: o bot não toca em nada enquanto não reconhece o tabuleiro.
+                endWordRef.get()?.let { w -> autoStop("✅ Batalha terminou (li \"$w\"). Toque ▶ na próxima"); return }
+                if (moves > 0 && now - lostSince > 1500 && now - lastEndOcr > 1500) {
+                    lastEndOcr = now
+                    screenshot()?.let { shot ->
+                        val small = runCatching { Bitmap.createScaledBitmap(shot, shot.width / 2, shot.height / 2, true) }.getOrNull()
+                        shot.recycle()
+                        if (small != null) readEndWord(small) { w -> if (w != null) endWordRef.set(w) }
+                    }
+                }
+                if (moves > 0 && now - lostSince > 60_000) {
+                    autoStop("⏹ Parado: 1 min sem ver o tabuleiro"); return
                 }
                 status("⏸ Tabuleiro sumiu ($recognized/$needed) — animação?")
                 continue
             }
             lostSince = 0L
+            endWordRef.set(null)
             // Pokémon novos que apareçam no meio da batalha (disruptions) entram na lista
             if (known.size < 12) for (l in freeLooks(view, feats, 3)) if (!isKnown(l)) {
                 known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
@@ -719,6 +733,24 @@ class BotService : AccessibilityService() {
                 }
                 .addOnFailureListener { crop.recycle(); onResult(null) }
         } catch (e: Exception) { crop.recycle(); onResult(null) }
+    }
+
+    /** Palavras que o jogo mostra quando a batalha acabou (vitória, derrota, captura). */
+    private val endWords = listOf(
+        "CLEAR", "VICTORY", "GAME OVER", "GAMEOVER", "CATCHABILITY", "OUT OF TIME", "GREAT BALL",
+        "TO MAP", "CAPTURE", "CAUGHT", "RAN AWAY", "FLED", "TRY AGAIN",
+    )
+
+    /** Lê o texto da tela inteira e diz qual palavra de fim de batalha apareceu (ou null). */
+    private fun readEndWord(img: Bitmap, onResult: (String?) -> Unit) {
+        try {
+            recognizer.process(InputImage.fromBitmap(img, 0))
+                .addOnSuccessListener { t ->
+                    val txt = t.text.uppercase().replace("\n", " ")
+                    img.recycle(); onResult(endWords.firstOrNull { txt.contains(it) })
+                }
+                .addOnFailureListener { img.recycle(); onResult(null) }
+        } catch (e: Exception) { img.recycle(); onResult(null) }
     }
 
     /** Para o bot por conta própria e deixa o motivo no painel. */
