@@ -194,6 +194,7 @@ class FramesTest {
             val mvK = Solver.best(spK, 6, emptySet(), BooleanArray(36) { !knownFree[it] })
             val spA = IntArray(36) { val s = v.species[it]; if (s >= 0) (canon[s] ?: s) else s }
             val mvA = Solver.best(spA, 6, emptySet(), BooleanArray(36) { !v.movable[it] }, v.frozen)
+            println("[rose] $n: team=$team porEspecie=" + r.speciesLook(v, f).map { (sp, lk) -> val e = Dex.identify(lk); "$sp=${e?.name}" + (if (l.isDisrupt(lk)) "(disr)" else "") + "/" + Dex.disruptionKind(lk) })
             println("[rose] $n: nomes=${spName.values.toSet()}  (? = Pokémon que o bot NÃO aceitou mexer)\n$sb" +
                 "[rose]   jogada só com reconhecidos: $mvK | com todos os livres: $mvA")
         }
