@@ -2,7 +2,13 @@ package com.alan.shufflebot
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ContentValues
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.os.Environment
+import android.provider.MediaStore
 import android.graphics.Color
 import android.graphics.Insets
 import android.graphics.Path
@@ -121,8 +127,10 @@ class BotService : AccessibilityService() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val start = smallButton("▶ Iniciar") { if (running) stopBot() else startBot() }
         val calib = smallButton("Calibrar") { toggleCalibration() }
+        val debug = smallButton("📷") { saveDebugShot() }
         row.addView(start)
         row.addView(calib)
+        row.addView(debug)
         root.addView(handle); root.addView(status); root.addView(row)
 
         val p = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT)
@@ -271,15 +279,26 @@ class BotService : AccessibilityService() {
         var badSince = 0L                        // desde quando a tela não parece batalha
         var unstable = 0
 
-        // Marca a tela como "não é batalha". Não joga; se durar demais, para de vez.
+        // Aprende quais "tipos" não se mexem (pedra, bloco, moeda...): aparência que só aparece em jogadas que falharam.
+        class Sig(val f: FloatArray) { var fails = 0; var ok = 0 }
+        val sigs = ArrayList<Sig>()
+        val sigThr = prefs.threshold * 0.8f
+        fun sigOf(f: FloatArray): Sig {
+            for (sg in sigs) if (reader.dist(sg.f, f) < sigThr) return sg
+            return Sig(f.copyOf()).also { sigs.add(it) }
+        }
+        fun unmovable(f: FloatArray) = sigs.any { it.ok == 0 && it.fails >= 2 && reader.dist(it.f, f) < sigThr }
+
+        // Tela que não parece batalha (animação, janela, menu): NÃO joga e espera o tabuleiro voltar.
+        // Só desiste depois de muito tempo sem ver o tabuleiro.
         fun bad(reason: String): Boolean {
             val now = System.currentTimeMillis()
             if (badSince == 0L) badSince = now
-            if (now - badSince > 4000) {
-                autoStop("⏹ Parado: saiu da batalha ($reason)")
+            if (now - badSince > 90_000) {
+                autoStop("⏹ Parado: 1 min e meio sem ver o tabuleiro")
                 return true
             }
-            status("⏸ Aguardando… $reason")
+            status("⏸ Pausado: $reason")
             return false
         }
 
@@ -301,7 +320,7 @@ class BotService : AccessibilityService() {
             prev = feats
             if (prefs.waitStable && (p0 == null || reader.changedCells(p0, feats) > 1)) {
                 unstable++
-                if ((badSince != 0L || unstable >= 8) && bad("tela não para de mexer")) return
+                if (unstable >= 4 && bad("tela mexendo")) return
                 continue
             }
             unstable = 0
@@ -327,9 +346,11 @@ class BotService : AccessibilityService() {
                 if (reader.changedCells(bm, feats) < 3) {
                     failed.add(lm.key)
                     cellFails[lm.from]++; cellFails[lm.to]++
+                    sigOf(bm[lm.from]).fails++; sigOf(bm[lm.to]).fails++
                     failStreak++
-                    if (failStreak >= 5) { autoStop("⏹ Parado: as jogadas não estão funcionando"); return }
+                    if (failStreak >= 15) { autoStop("⏹ Parado: as jogadas não estão funcionando"); return }
                 } else {
+                    sigOf(bm[lm.from]).ok++; sigOf(bm[lm.to]).ok++
                     failed.clear(); cellFails.fill(0); failStreak = 0
                 }
                 lastMove = null; beforeMove = null
@@ -337,11 +358,12 @@ class BotService : AccessibilityService() {
 
             // 4) escolher e fazer a jogada
             val types = (labels.maxOrNull() ?: 0) + 1
-            val blocked = BooleanArray(total) { cellFails[it] >= 2 }
+            val blocked = BooleanArray(total) { cellFails[it] >= 1 || unmovable(feats[it]) }
             val mv = Solver.best(labels, g.n, failed, blocked)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
-                if (failed.size > 40) { failed.clear(); cellFails.fill(0) }
+                // talvez tenha bloqueado demais: libera as casas (mas mantém o que aprendeu sobre pedras)
+                failed.clear(); cellFails.fill(0)
                 Thread.sleep(300); continue
             }
 
@@ -352,6 +374,91 @@ class BotService : AccessibilityService() {
             drag(g.center(mv.from), g.center(mv.to), prefs)
             Thread.sleep(prefs.afterMoveMs.toLong())
         }
+    }
+
+    /**
+     * Salva na Galeria (Pictures/ShuffleBot) um print com o que o bot está "vendo":
+     * o número do tipo em cada casa e o diagnóstico do tabuleiro.
+     */
+    private fun saveDebugShot() {
+        Thread {
+            val prefs = Prefs(this)
+            val g = prefs.geom()
+            if (g == null) { status("Calibre a grade primeiro"); return@Thread }
+            var shot = screenshot()
+            if (shot == null) { Thread.sleep(400); shot = screenshot() }
+            if (shot == null) { status("Não consegui tirar o print"); return@Thread }
+            val reader = BoardReader()
+            val feats = reader.features(shot, g)
+            val out = shot.copy(Bitmap.Config.ARGB_8888, true)
+            shot.recycle()
+
+            val c = Canvas(out)
+            val d = resources.displayMetrics.density
+            val txt = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = 16 * d; typeface = Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER
+            }
+            val box = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 2 * d }
+            val bg = Paint().apply { color = Color.argb(170, 0, 0, 0) }
+            val palette = intArrayOf(
+                Color.RED, Color.CYAN, Color.YELLOW, Color.GREEN, Color.MAGENTA, Color.WHITE,
+                Color.rgb(255, 140, 0), Color.rgb(140, 120, 255), Color.rgb(160, 255, 160), Color.rgb(255, 160, 200)
+            )
+            val lines = ArrayList<String>()
+            if (feats == null) {
+                lines.add("Grade fora da tela")
+            } else {
+                val labels = reader.cluster(feats, prefs.threshold.toFloat())
+                val types = (labels.maxOrNull() ?: 0) + 1
+                lines.add("tipos: $types  •  brilho: ${reader.brightness(feats).toInt()}  •  tolerância: ${prefs.threshold}")
+                lines.add("diagnóstico: ${reader.boardProblem(labels) ?: "tabuleiro OK"}")
+                val mv = Solver.best(labels, g.n, emptySet(), BooleanArray(g.n * g.n))
+                for (i in labels.indices) {
+                    val col = palette[labels[i] % palette.size]
+                    val r = i / g.n
+                    val cc = i % g.n
+                    val x0 = g.left + cc * g.cell
+                    val y0 = g.top + r * g.cell
+                    box.color = col
+                    c.drawRect(x0 + 2, y0 + 2, x0 + g.cell - 2, y0 + g.cell - 2, box)
+                    val cx = x0 + g.cell / 2
+                    val cy = y0 + g.cell / 2
+                    c.drawCircle(cx, cy - 5 * d, 13 * d, bg)
+                    txt.color = col
+                    c.drawText(labels[i].toString(), cx, cy, txt)
+                }
+                if (mv != null) {
+                    val a = g.center(mv.from)
+                    val b = g.center(mv.to)
+                    val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = 5 * d }
+                    c.drawLine(a.x, a.y, b.x, b.y, arrow)
+                    c.drawCircle(b.x, b.y, 8 * d, arrow)
+                    lines.add("melhor jogada: casa ${mv.from} → ${mv.to}")
+                }
+            }
+            var y = g.top - lines.size * 22 * d - 8 * d
+            if (y < 40 * d) y = 40 * d
+            txt.textAlign = Paint.Align.LEFT
+            txt.textSize = 14 * d
+            for (l in lines) {
+                c.drawRect(0f, y - 17 * d, out.width.toFloat(), y + 6 * d, bg)
+                txt.color = Color.WHITE
+                c.drawText(l, 8 * d, y, txt)
+                y += 22 * d
+            }
+
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "shufflebot_${System.currentTimeMillis()}.png")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ShuffleBot")
+            }
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            val ok = uri != null && contentResolver.openOutputStream(uri)?.use {
+                out.compress(Bitmap.CompressFormat.PNG, 100, it)
+            } == true
+            out.recycle()
+            status(if (ok) "📷 Print salvo na Galeria (ShuffleBot)" else "Não consegui salvar o print")
+        }.start()
     }
 
     /** Para o bot por conta própria e deixa o motivo no painel. */

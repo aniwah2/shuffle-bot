@@ -121,10 +121,10 @@ class BoardReader(private val blocks: Int = 4, private val inset: Float = 0.18f)
         val solid = counts.count { it >= 4 }
         return when {
             types < 3 -> "poucos tipos ($types)"
-            types > 10 -> "tipos demais ($types)"
-            singles > 3 -> "muitas peças soltas"
-            biggest > labels.size * 0.55f -> "área lisa grande (janela/menu?)"
-            solid < 3 -> "tipos pouco repetidos"
+            types > 14 -> "tipos demais ($types)"
+            singles > 7 -> "muitas peças soltas"
+            biggest > labels.size * 0.6f -> "área lisa grande (janela/menu?)"
+            solid < 2 -> "tipos pouco repetidos"
             else -> null
         }
     }
