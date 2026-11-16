@@ -17,11 +17,11 @@ class Prefs(ctx: Context) {
 
     /** Tempo segurando o dedo antes/depois de arrastar (ms). 0 = arrasto simples. */
     var holdMs: Int
-        get() = sp.getInt("hold", 60)
+        get() = sp.getInt("hold", 40)
         set(v) = sp.edit().putInt("hold", v).apply()
     /** Duração do arrasto (ms). */
     var moveMs: Int
-        get() = sp.getInt("move", 180)
+        get() = sp.getInt("move", 120)
         set(v) = sp.edit().putInt("move", v).apply()
     /** Pausa depois de cada jogada (ms). */
     var afterMoveMs: Int
@@ -42,6 +42,14 @@ class Prefs(ctx: Context) {
     var panelY: Int
         get() = sp.getInt("py", 200)
         set(v) = sp.edit().putInt("py", v).apply()
+
+    /** Posição da moldura de calibração (coordenadas da janela flutuante). */
+    var frameX: Int
+        get() = sp.getInt("fx", -1)
+        set(v) = sp.edit().putInt("fx", v).apply()
+    var frameY: Int
+        get() = sp.getInt("fy", -1)
+        set(v) = sp.edit().putInt("fy", v).apply()
 
     fun geom(): BoardGeom? =
         if (boardSize > 0 && boardLeft >= 0 && boardTop >= 0) BoardGeom(boardLeft, boardTop, boardSize) else null

@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Insets
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.PointF
@@ -14,6 +15,7 @@ import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
@@ -39,6 +41,7 @@ class BotService : AccessibilityService() {
     private var startBtn: Button? = null
     private var calibBtn: Button? = null
     private var frame: GridFrameView? = null
+    private var frameLp: WindowManager.LayoutParams? = null
 
     @Volatile private var running = false
     private var worker: Thread? = null
@@ -71,9 +74,15 @@ class BotService : AccessibilityService() {
     private fun overlayParams(w: Int, h: Int) = WindowManager.LayoutParams(
         w, h,
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         PixelFormat.TRANSLUCENT
-    ).apply { gravity = Gravity.TOP or Gravity.START }
+    ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        // coordenadas sempre a partir do canto da tela física (inclusive notch/barra de status)
+        layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+    }
 
     private fun smallButton(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
@@ -134,37 +143,79 @@ class BotService : AccessibilityService() {
 
     // ---------------------------------------------------------------- calibração
 
+    private fun screenBounds() = wm.currentWindowMetrics.bounds
+
+    private fun systemBars(): Insets = wm.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(
+        WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+    )
+
+    /** Mantém a moldura sempre dentro da tela física. */
+    private fun clampFrame(p: WindowManager.LayoutParams) {
+        val b = screenBounds()
+        val maxSize = minOf(b.width(), b.height())
+        p.width = p.width.coerceIn(dp(120), maxSize)
+        p.height = p.width
+        p.x = p.x.coerceIn(0, b.width() - p.width)
+        p.y = p.y.coerceIn(0, b.height() - p.height)
+    }
+
+    /** true se a moldura está em cima da barra de status, notch ou barra de navegação. */
+    private fun overlapsSystemBars(p: WindowManager.LayoutParams): Boolean {
+        val b = screenBounds()
+        val ins = systemBars()
+        return p.x < ins.left || p.y < ins.top ||
+            p.x + p.width > b.width() - ins.right ||
+            p.y + p.height > b.height() - ins.bottom
+    }
+
+    private fun refreshFrame(v: GridFrameView, p: WindowManager.LayoutParams) {
+        clampFrame(p)
+        wm.updateViewLayout(v, p)
+        val warn = overlapsSystemBars(p)
+        v.warning = warn
+        status(if (warn) "⚠️ Grade em cima da barra do sistema" else "Encaixe a grade nas 6x6 casas")
+    }
+
     private fun toggleCalibration() {
         val prefs = Prefs(this)
         val current = frame
         if (current == null) {
             stopBot()
-            val bounds = wm.currentWindowMetrics.bounds
+            val bounds = screenBounds()
             val size = if (prefs.boardSize > 0) prefs.boardSize else (bounds.width() * 0.9).toInt()
-            val left = if (prefs.boardLeft >= 0) prefs.boardLeft else (bounds.width() - size) / 2
-            val top = if (prefs.boardTop >= 0) prefs.boardTop else (bounds.height() * 0.45).toInt()
+            val left = if (prefs.frameX >= 0) prefs.frameX else (bounds.width() - size) / 2
+            val top = if (prefs.frameY >= 0) prefs.frameY else (bounds.height() * 0.45).toInt()
 
             val v = GridFrameView(this)
             val p = overlayParams(size, size).apply { x = left; y = top }
-            v.onDrag = { dx, dy -> p.x += dx; p.y += dy; wm.updateViewLayout(v, p) }
-            v.onResize = { d ->
-                p.width = (p.width + d).coerceAtLeast(dp(120)); p.height = p.width
-                wm.updateViewLayout(v, p)
-            }
+            clampFrame(p)
+            v.onDrag = { dx, dy -> p.x += dx; p.y += dy; refreshFrame(v, p) }
+            v.onResize = { d -> p.width += d; p.height = p.width; refreshFrame(v, p) }
             wm.addView(v, p)
             frame = v
+            frameLp = p
             calibBtn?.text = "Salvar grade"
-            status("Encaixe a grade nas 6x6 casas")
+            refreshFrame(v, p)
         } else {
+            val p = frameLp ?: return
             val loc = IntArray(2)
             current.getLocationOnScreen(loc)
+            val b = screenBounds()
+            if (loc[0] < 0 || loc[1] < 0 || loc[0] + current.width > b.width() || loc[1] + current.height > b.height()) {
+                status("❌ Grade fora da tela — ajuste antes de salvar")
+                return
+            }
             prefs.boardLeft = loc[0]
             prefs.boardTop = loc[1]
             prefs.boardSize = current.width
+            prefs.frameX = p.x
+            prefs.frameY = p.y
+            val warn = overlapsSystemBars(p)
             wm.removeView(current)
             frame = null
+            frameLp = null
             calibBtn?.text = "Calibrar"
-            status("Grade salva. Pode iniciar!")
+            status(if (warn) "Salva, mas confira: parte da grade está na barra do sistema" else "✅ Grade salva. Pode iniciar!")
         }
     }
 
