@@ -112,7 +112,7 @@ class FramesTest {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val r = BoardReader()
         val l = BattleLearner(r)
-        for (n in listOf("v8_start", "v8_start2", "v8_start", "v8_start2")) {
+        for (n in listOf("v8_a", "v8_b", "v8_c", "v8_a", "v8_b")) {
             val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
             val f = r.features(img, g)!!; l.tryLearnDex(r.analyze(f, 15f, r.frozenByBorder(img, g)), f)
         }
