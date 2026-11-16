@@ -51,6 +51,23 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("fy", -1)
         set(v) = sp.edit().putInt("fy", v).apply()
 
+    /** Time marcado: lista de (papel, aparência média da espécie). */
+    var team: List<Pair<Role, FloatArray>>
+        get() {
+            val raw = sp.getString("team", "") ?: ""
+            if (raw.isBlank()) return emptyList()
+            return raw.split(";").mapNotNull { e ->
+                val parts = e.split(":")
+                if (parts.size != 2) return@mapNotNull null
+                val role = runCatching { Role.valueOf(parts[0]) }.getOrNull() ?: return@mapNotNull null
+                val f = parts[1].split(",").mapNotNull { it.toFloatOrNull() }.toFloatArray()
+                Pair(role, f)
+            }
+        }
+        set(v) = sp.edit().putString("team", v.joinToString(";") { (r, f) ->
+            r.name + ":" + f.joinToString(",") { "%.1f".format(java.util.Locale.US, it) }
+        }).apply()
+
     fun geom(): BoardGeom? =
         if (boardSize > 0 && boardLeft >= 0 && boardTop >= 0) BoardGeom(boardLeft, boardTop, boardSize) else null
 }

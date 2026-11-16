@@ -249,4 +249,41 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
             else -> null
         }
     }
+
+    // ------------------------------------------------------------------ time
+
+    /** Aparência média de cada espécie, usando só as peças livres (sem gelo). */
+    fun speciesLook(view: BoardView, feats: Array<FloatArray>): Map<Int, FloatArray> {
+        val sum = HashMap<Int, FloatArray>()
+        val cnt = HashMap<Int, Int>()
+        for (i in feats.indices) {
+            val sp = view.species[i]
+            if (sp < 0 || !view.movable[i]) continue
+            val acc = sum.getOrPut(sp) { FloatArray(feats[i].size) }
+            for (j in acc.indices) acc[j] += feats[i][j]
+            cnt[sp] = (cnt[sp] ?: 0) + 1
+        }
+        for ((sp, acc) in sum) { val c = cnt[sp]!!.toFloat(); for (j in acc.indices) acc[j] = acc[j] / c }
+        return sum
+    }
+
+    /** Descobre o papel de cada espécie do tabuleiro comparando com o time salvo. */
+    fun rolesFor(view: BoardView, feats: Array<FloatArray>, team: List<Pair<Role, FloatArray>>, thr: Float): Array<Role>? {
+        if (team.isEmpty()) return null
+        val looks = speciesLook(view, feats)
+        val maxSp = (view.species.maxOrNull() ?: -1)
+        if (maxSp < 0) return null
+        val roles = Array(maxSp + 1) { Role.NORMAL }
+        for ((sp, look) in looks) {
+            var best = Float.MAX_VALUE
+            var role = Role.NORMAL
+            for ((r, f) in team) {
+                if (f.size != look.size) continue
+                val dd = dist(look, f)
+                if (dd < best) { best = dd; role = r }
+            }
+            if (best < thr) roles[sp] = role
+        }
+        return roles
+    }
 }

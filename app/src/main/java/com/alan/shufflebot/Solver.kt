@@ -6,68 +6,133 @@ data class Move(val from: Int, val to: Int, val score: Int) {
 
 fun pairKey(a: Int, b: Int): Long = minOf(a, b).toLong() * 1000 + maxOf(a, b)
 
+/** Papel de um Pokémon do time, marcado pelo jogador. */
+enum class Role(val label: String, val weight: Float, val bigBonus: Float) {
+    NORMAL("", 1.0f, 1.0f),
+    MEGA("MEGA", 2.0f, 1.6f),     // encher a barra de Mega o quanto antes
+    FORTE("FORTE", 1.5f, 2.0f),   // habilidade forte: vale muito fazer 4 ou 5
+    APOIO("apoio", 0.6f, 0.6f);   // pouco útil: só se não houver coisa melhor
+
+    fun next(): Role = values()[(ordinal + 1) % values().size]
+}
+
 /**
- * No Pokémon Shuffle dá para arrastar um Pokémon para QUALQUER casa (ele troca de lugar
- * com o que estiver lá). Então testamos todas as trocas possíveis e escolhemos a melhor.
+ * No Pokémon Shuffle dá para arrastar um Pokémon para QUALQUER casa (troca de lugar com o que estiver lá).
+ * Para cada troca possível, simulamos a combinação, as peças caindo e os combos em cadeia,
+ * e damos uma nota levando em conta o papel de cada Pokémon no time.
  */
 object Solver {
 
-    fun best(lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray, frozen: BooleanArray? = null): Move? {
-        val b = lab.copyOf()
-        var best: Move? = null
+    private const val MAX_WAVES = 8
+
+    /**
+     * @param lab     espécie de cada casa (>= 0); negativos nunca combinam (bloco, vazio)
+     * @param blocked casas que não podem ser arrastadas
+     * @param frozen  casas congeladas (combinam, mas não se movem nem caem)
+     * @param roles   papel de cada espécie (índice = espécie); null = todos normais
+     */
+    fun best(
+        lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray,
+        frozen: BooleanArray? = null, roles: Array<Role>? = null,
+    ): Move? {
         val total = n * n
+        val fz = frozen ?: BooleanArray(total)
+        var best: Move? = null
+        val b = IntArray(total)
+        val f = BooleanArray(total)
         for (i in 0 until total) {
             if (blocked[i]) continue
             for (j in i + 1 until total) {
                 if (blocked[j] || lab[i] == lab[j]) continue
                 if (failed.contains(pairKey(i, j))) continue
-
+                lab.copyInto(b); fz.copyInto(f)
                 b[i] = lab[j]; b[j] = lab[i]
-                val atJ = matchedAt(b, n, j)   // peça que veio de i, agora em j
-                val atI = matchedAt(b, n, i)   // peça que veio de j, agora em i
-                b[i] = lab[i]; b[j] = lab[j]
-
-                if (atJ.isEmpty() && atI.isEmpty()) continue
-                val cells = HashSet<Int>().apply { addAll(atJ); addAll(atI) }
-                val s = score(cells, atJ.size, atI.size, n) + (if (frozen != null) cells.count { frozen[it] } * 8 else 0)
+                val firstWave = BooleanArray(total)
+                val s = simulate(b, f, n, roles, firstWave)
+                if (s <= 0) continue
                 if (best == null || s > best.score) {
                     // arrasta a peça que forma a combinação no destino
-                    best = if (atJ.size >= atI.size) Move(i, j, s) else Move(j, i, s)
+                    best = if (firstWave[j]) Move(i, j, s) else Move(j, i, s)
                 }
             }
         }
         return best
     }
 
-    /** Casas que somem se a peça em p formar linha/coluna de 3+. */
-    private fun matchedAt(b: IntArray, n: Int, p: Int): List<Int> {
-        val r = p / n
-        val c = p % n
-        val t = b[p]
-        val out = ArrayList<Int>()
+    /** Simula combinações + quedas + combos. Retorna a nota (0 = não combina nada). */
+    private fun simulate(b: IntArray, f: BooleanArray, n: Int, roles: Array<Role>?, firstWave: BooleanArray): Int {
+        var score = 0f
+        var unknown = -1000
+        val matched = BooleanArray(n * n)
+        for (wave in 0 until MAX_WAVES) {
+            matched.fill(false)
+            var any = false
+            var waveScore = 0f
 
-        var c0 = c; while (c0 > 0 && b[r * n + c0 - 1] == t) c0--
-        var c1 = c; while (c1 < n - 1 && b[r * n + c1 + 1] == t) c1++
-        if (c1 - c0 + 1 >= 3) for (x in c0..c1) out.add(r * n + x)
+            // linhas e colunas com 3+ iguais
+            for (dir in 0..1) {
+                for (line in 0 until n) {
+                    var k = 0
+                    while (k < n) {
+                        val p0 = if (dir == 0) line * n + k else k * n + line
+                        val sp = b[p0]
+                        var len = 1
+                        while (k + len < n) {
+                            val p = if (dir == 0) line * n + k + len else (k + len) * n + line
+                            if (b[p] != sp) break
+                            len++
+                        }
+                        if (sp >= 0 && len >= 3) {
+                            any = true
+                            val role = roleOf(roles, sp)
+                            for (t in 0 until len) matched[if (dir == 0) line * n + k + t else (k + t) * n + line] = true
+                            if (len == 4) waveScore += 15f * role.bigBonus
+                            if (len >= 5) waveScore += 40f * role.bigBonus
+                        }
+                        k += len
+                    }
+                }
+            }
+            if (!any) break
 
-        var r0 = r; while (r0 > 0 && b[(r0 - 1) * n + c] == t) r0--
-        var r1 = r; while (r1 < n - 1 && b[(r1 + 1) * n + c] == t) r1++
-        if (r1 - r0 + 1 >= 3) for (y in r0..r1) if (y != r) out.add(y * n + c)
+            for (p in matched.indices) if (matched[p]) {
+                val sp = b[p]
+                waveScore += 10f * roleOf(roles, sp).weight
+                if (f[p]) waveScore += 8f                     // quebra barreira
+                if (wave == 0) firstWave[p] = true
+                // peças "lisas" (bloco/pedra) ao lado da combinação costumam quebrar
+                val r = p / n; val c = p % n
+                if (r > 0 && b[p - n] < 0 && b[p - n] > -1000) waveScore += 3f
+                if (r < n - 1 && b[p + n] < 0 && b[p + n] > -1000) waveScore += 3f
+                if (c > 0 && b[p - 1] < 0 && b[p - 1] > -1000) waveScore += 3f
+                if (c < n - 1 && b[p + 1] < 0 && b[p + 1] > -1000) waveScore += 3f
+            }
+            // combos depois da primeira onda: valem um pouco menos (incerteza), mas cada combo ganha bônus
+            score += if (wave == 0) waveScore else waveScore * 0.8f + 12f
 
-        if (out.isNotEmpty() && !out.contains(p)) out.add(p)
-        return out
-    }
-
-    private fun score(cells: Set<Int>, a: Int, b: Int, n: Int): Int {
-        var s = cells.size * 10
-        for (k in intArrayOf(a, b)) {
-            if (k >= 5) s += 40        // combinações de 5 dão dano/efeito maior
-            else if (k == 4) s += 15
+            // limpa e aplica gravidade: congelados ficam parados, o resto cai; o topo vira "desconhecido"
+            for (p in matched.indices) if (matched[p]) { b[p] = Int.MIN_VALUE; f[p] = false }
+            for (c in 0 until n) {
+                var write = n - 1
+                for (r in n - 1 downTo 0) {
+                    val p = r * n + c
+                    if (f[p]) continue
+                    if (b[p] == Int.MIN_VALUE) continue
+                    while (write >= 0 && f[write * n + c]) write--
+                    if (write < 0) break
+                    if (write != r) b[write * n + c] = b[p]
+                    write--
+                }
+                while (write >= 0) {
+                    val p = write * n + c
+                    if (!f[p]) b[p] = unknown--
+                    write--
+                }
+            }
         }
-        if (a >= 3 && b >= 3) s += 20  // duas combinações de uma vez
-        // combinações mais embaixo fazem mais peças caírem => mais chance de combo
-        val lowest = cells.maxOf { it / n }
-        s += lowest * 2
-        return s
+        return score.toInt()
     }
+
+    private fun roleOf(roles: Array<Role>?, sp: Int): Role =
+        if (roles == null || sp < 0 || sp >= roles.size) Role.NORMAL else roles[sp]
 }

@@ -46,6 +46,9 @@ class BotService : AccessibilityService() {
     private var statusText: TextView? = null
     private var startBtn: Button? = null
     private var calibBtn: Button? = null
+    private var teamBtn: Button? = null
+    private var teamView: TeamOverlayView? = null
+    private var teamLooks: Map<Int, FloatArray>? = null
     private var frame: GridFrameView? = null
     private var frameLp: WindowManager.LayoutParams? = null
 
@@ -75,6 +78,7 @@ class BotService : AccessibilityService() {
     override fun onDestroy() {
         stopBot()
         frame?.let { runCatching { wm.removeView(it) } }
+        teamView?.let { runCatching { wm.removeView(it) } }
         panel?.let { runCatching { wm.removeView(it) } }
         instance = null
         shotExecutor.shutdown()
@@ -127,10 +131,13 @@ class BotService : AccessibilityService() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val start = smallButton("▶ Iniciar") { if (running) stopBot() else startBot() }
         val calib = smallButton("Calibrar") { toggleCalibration() }
+        val team = smallButton("Time") { toggleTeam() }
         val debug = smallButton("📷") { saveDebugShot() }
         row.addView(start)
         row.addView(calib)
+        row.addView(team)
         row.addView(debug)
+        teamBtn = team
         root.addView(handle); root.addView(status); root.addView(row)
 
         val p = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT)
@@ -235,10 +242,59 @@ class BotService : AccessibilityService() {
         }
     }
 
+    // ---------------------------------------------------------------- time
+
+    /** Abre a camada para marcar o time (ou salva e fecha, se já estiver aberta). */
+    private fun toggleTeam() {
+        val current = teamView
+        val prefs = Prefs(this)
+        if (current != null) {
+            val looks = teamLooks ?: emptyMap()
+            val list = current.roles.mapNotNull { (sp, role) -> looks[sp]?.let { Pair(role, it) } }
+            prefs.team = list
+            runCatching { wm.removeView(current) }
+            teamView = null; teamLooks = null
+            teamBtn?.text = "Time"
+            status(if (list.isEmpty()) "Time limpo (todos normais)" else "✅ Time salvo: ${list.size} marcado(s)")
+            return
+        }
+        if (frame != null) toggleCalibration()
+        stopBot()
+        val g = prefs.geom() ?: run { status("Calibre a grade primeiro"); return }
+        status("Lendo o tabuleiro…")
+        Thread {
+            Thread.sleep(400)  // dá tempo do jogo redesenhar
+            val shot = screenshot() ?: run { status("Não consegui ler a tela"); return@Thread }
+            val reader = BoardReader()
+            val feats = reader.features(shot, g)
+            shot.recycle()
+            if (feats == null) { status("Grade fora da tela — recalibre"); return@Thread }
+            val view = reader.analyze(feats, prefs.threshold.toFloat())
+            val looks = reader.speciesLook(view, feats)
+            // papéis já salvos aparecem marcados
+            val roles = HashMap<Int, Role>()
+            reader.rolesFor(view, feats, prefs.team, prefs.threshold * 1.3f)?.forEachIndexed { sp, r ->
+                if (r != Role.NORMAL && looks.containsKey(sp)) roles[sp] = r
+            }
+            main.post {
+                val v = TeamOverlayView(this, g.n, view.species, roles)
+                val p = overlayParams(g.size, g.size).apply {
+                    x = if (prefs.frameX >= 0) prefs.frameX else g.left
+                    y = if (prefs.frameY >= 0) prefs.frameY else g.top
+                }
+                wm.addView(v, p)
+                teamView = v; teamLooks = looks
+                teamBtn?.text = "Salvar time"
+                status("Toque nos Pokémon: MEGA → FORTE → apoio")
+            }
+        }.start()
+    }
+
     // ---------------------------------------------------------------- liga/desliga
 
     private fun startBot() {
         if (frame != null) toggleCalibration()
+        if (teamView != null) toggleTeam()
         if (Prefs(this).geom() == null) { status("Calibre a grade primeiro"); return }
         running = true
         startBtn?.text = "⏸ Parar"
@@ -264,6 +320,8 @@ class BotService : AccessibilityService() {
         val g = prefs.geom() ?: return
         val reader = BoardReader()
         val total = g.n * g.n
+
+        val team = prefs.team
 
         // O jogo é o app que estava na frente quando você tocou em Iniciar.
         val gamePkg = foregroundPkg
@@ -359,7 +417,8 @@ class BotService : AccessibilityService() {
             // 4) escolher e fazer a jogada
             val types = view.types
             val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) }
-            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen)
+            val roles = reader.rolesFor(view, feats, team, prefs.threshold * 1.3f)
+            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen, roles)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
                 // talvez tenha bloqueado demais: libera as casas (mas mantém o que aprendeu sobre pedras)
@@ -373,7 +432,8 @@ class BotService : AccessibilityService() {
                 val fz = view.frozen.count { it }
                 if (fz > 0) append(" • $fz no gelo")
             }
-            status("Jogando • $types tipos$extra • jogada $moves")
+            val teamTxt = if (roles != null && roles.any { it != Role.NORMAL }) " • time ✓" else ""
+            status("Jogando • $types tipos$extra$teamTxt • jogada $moves")
             beforeMove = feats
             lastMove = mv
             drag(g.center(mv.from), g.center(mv.to), prefs)
@@ -418,7 +478,10 @@ class BotService : AccessibilityService() {
                 lines.add("tipos: ${view.types} • blocos: ${view.blocks} • gelo: $fz • vazias: ${view.empty} • tolerância: ${prefs.threshold}")
                 lines.add("diagnóstico: ${reader.boardProblem(view) ?: "tabuleiro OK"} • brilho ${reader.brightness(feats).toInt()}")
                 val blockedNow = BooleanArray(g.n * g.n) { !view.movable[it] }
-                val mv = Solver.best(view.species, g.n, emptySet(), blockedNow, view.frozen)
+                val dbgRoles = reader.rolesFor(view, feats, prefs.team, prefs.threshold * 1.3f)
+                if (dbgRoles != null) lines.add("time: " + dbgRoles.withIndex().filter { it.value != Role.NORMAL }
+                    .joinToString { "${it.index}=${it.value.label}" }.ifEmpty { "nenhum reconhecido" })
+                val mv = Solver.best(view.species, g.n, emptySet(), blockedNow, view.frozen, dbgRoles)
                 for (i in view.species.indices) {
                     val sp = view.species[i]
                     val label = when {
