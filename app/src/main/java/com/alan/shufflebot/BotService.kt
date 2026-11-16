@@ -53,6 +53,16 @@ class BotService : AccessibilityService() {
     private var frameLp: WindowManager.LayoutParams? = null
 
     @Volatile private var running = false
+    /** Até quando o bot fica parado porque você tocou na tela. */
+    @Volatile private var userPauseUntil = 0L
+    /** Até quando um toque "fora do painel" é nosso próprio arrasto (e não seu dedo). */
+    @Volatile private var gestureBusyUntil = 0L
+
+    private fun onOutsideTouch() {
+        val now = System.currentTimeMillis()
+        if (now < gestureBusyUntil) return
+        if (running) userPauseUntil = now + 2500
+    }
     private var worker: Thread? = null
 
     // ---------------------------------------------------------------- ciclo de vida
@@ -141,7 +151,16 @@ class BotService : AccessibilityService() {
         root.addView(handle); root.addView(status); root.addView(row)
 
         val p = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT)
-            .apply { x = prefs.panelX; y = prefs.panelY }
+            .apply {
+                x = prefs.panelX; y = prefs.panelY
+                // recebe um aviso quando você toca em qualquer lugar fora do painel
+                flags = flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            }
+        root.setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) onOutsideTouch()
+            false
+        }
 
         // arrastar o painel pelo título
         var lx = 0f; var ly = 0f
@@ -356,14 +375,22 @@ class BotService : AccessibilityService() {
     private fun botLoop() {
         val prefs = Prefs(this)
         val reader = BoardReader()
-        var g = prefs.geom() ?: return       // usa a grade salva; não reajusta ao iniciar
-        var lastFit = 0L
+        val g = prefs.geom() ?: return       // usa a grade salva; nunca reajusta durante o jogo
         val total = g.n * g.n
-
+        val thr = prefs.threshold.toFloat()
         val team = prefs.team
 
         // O jogo é o app que estava na frente quando você tocou em Iniciar.
         val gamePkg = foregroundPkg
+
+        // ---- Pokémon DESTA batalha. Só joga se a maior parte das casas forem eles.
+        // (Chão do cenário, Pokébola, janela da Great Ball etc. não batem com nenhum e o bot não toca.)
+        val known = ArrayList<FloatArray>()
+        val knownThr = 20f
+        fun isKnown(f: FloatArray) = known.any { reader.dist(it, f) < knownThr }
+        var candidate: List<FloatArray>? = null
+        var candidateStreak = 0
+        val waitingSince = System.currentTimeMillis()
 
         var prev: Array<FloatArray>? = null
         var lastMove: Move? = null
@@ -372,31 +399,25 @@ class BotService : AccessibilityService() {
         val cellFails = IntArray(total)
         var moves = 0
         var failStreak = 0
-        var baseline = -1f                       // brilho do tabuleiro no começo da batalha
-        var badSince = 0L                        // desde quando a tela não parece batalha
+        var lostSince = 0L
         var unstable = 0
 
         // Aprende quais "tipos" não se mexem (pedra, bloco, moeda...): aparência que só aparece em jogadas que falharam.
         class Sig(val f: FloatArray) { var fails = 0; var ok = 0 }
         val sigs = ArrayList<Sig>()
-        val sigThr = prefs.threshold * 0.8f
+        val sigThr = thr * 0.8f
         fun sigOf(f: FloatArray): Sig {
             for (sg in sigs) if (reader.dist(sg.f, f) < sigThr) return sg
             return Sig(f.copyOf()).also { sigs.add(it) }
         }
         fun unmovable(f: FloatArray) = sigs.any { it.ok == 0 && it.fails >= 2 && reader.dist(it.f, f) < sigThr }
 
-        // Tela que não parece batalha (animação, janela, menu): NÃO joga e espera o tabuleiro voltar.
-        // Só desiste depois de muito tempo sem ver o tabuleiro.
-        fun bad(reason: String): Boolean {
-            val now = System.currentTimeMillis()
-            if (badSince == 0L) badSince = now
-            if (now - badSince > 300_000) {
-                autoStop("⏹ Parado: 5 min sem ver o tabuleiro")
-                return true
-            }
-            status("⏸ $reason")
-            return false
+        /** Aparência média das espécies livres com pelo menos [minCells] casas. */
+        fun freeLooks(view: BoardView, feats: Array<FloatArray>, minCells: Int): List<FloatArray> {
+            val cnt = HashMap<Int, Int>()
+            for (i in 0 until total) if (view.movable[i] && view.species[i] >= 0) cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
+            val looks = reader.speciesLook(view, feats)
+            return cnt.filter { it.value >= minCells }.keys.mapNotNull { looks[it] }
         }
 
         while (running) {
@@ -405,46 +426,66 @@ class BotService : AccessibilityService() {
             if (gamePkg != null && fg != null && fg != gamePkg) {
                 autoStop("⏹ Parado: você saiu do jogo"); return
             }
+            // 0b) você tocou na tela: o bot sai do caminho
+            if (System.currentTimeMillis() < userPauseUntil) {
+                status("✋ Você tocou na tela — esperando")
+                lastMove = null; beforeMove = null; prev = null
+                Thread.sleep(150); continue
+            }
 
             val bmp = screenshot()
-            if (bmp == null) { Thread.sleep(120); continue }
+            if (bmp == null) { Thread.sleep(60); continue }
             val feats = reader.features(bmp, g)
             bmp.recycle()
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
+            val now = System.currentTimeMillis()
 
-            // 1) esperar as peças pararem de cair (se a tela nunca para, não joga)
+            // 1) (opcional) esperar as peças assentarem — no máximo 1 print a mais
             val p0 = prev
             prev = feats
-            // brilhos e animações pequenas não contam; espera no máximo 2 prints e depois joga mesmo assim
-            if (prefs.waitStable && unstable < 2 && p0 != null && reader.changedCells(p0, feats, 30f) > 3) {
-                unstable++
-                continue
+            if (prefs.waitStable && unstable < 1 && p0 != null && reader.changedCells(p0, feats, 30f) > 3) {
+                unstable++; continue
             }
             unstable = 0
 
-            // 2) parece mesmo o tabuleiro?
-            val view = reader.analyze(feats, prefs.threshold.toFloat())
-            val problem = reader.boardProblem(view)
-            if (problem != null) {
-                // pode ser a grade desalinhada: tenta reajustar (no máximo a cada 20 s)
-                val now = System.currentTimeMillis()
-                if (badSince != 0L && now - badSince > 3000 && now - lastFit > 30_000) {
-                    g = autoFit(prefs, g, reader); lastFit = now; prev = null
+            val view = reader.analyze(feats, thr)
+
+            // 2) ainda não sabe quais Pokémon são desta batalha: aprende com um tabuleiro claro e parado
+            if (known.isEmpty()) {
+                val looks = if (reader.boardProblem(view) == null && view.empty <= 2) freeLooks(view, feats, 4) else emptyList()
+                if (looks.size >= 3) {
+                    val prevC = candidate
+                    val same = prevC != null && prevC.size == looks.size &&
+                        looks.all { l -> prevC.any { reader.dist(it, l) < knownThr } }
+                    candidateStreak = if (same) candidateStreak + 1 else 0
+                    candidate = looks
+                    if (candidateStreak >= 2) known.addAll(looks)
+                } else {
+                    candidate = null; candidateStreak = 0
+                }
+                if (known.isEmpty()) {
+                    if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }
+                    status("⏳ Aguardando a batalha…")
                     continue
                 }
-                if (bad("aguardando o tabuleiro ($problem)")) return; Thread.sleep(150); continue
             }
 
-            val light = reader.brightness(feats)
-            if (baseline < 0) baseline = light
-            if (light < baseline * 0.6f) {
-                if (bad("tela escureceu (janela?)")) return
-                Thread.sleep(150); continue
+            // 3) é mesmo o tabuleiro desta batalha?
+            val recognized = feats.count { isKnown(it) }
+            if (recognized < total / 2 || view.empty > 6) {
+                if (lostSince == 0L) lostSince = now
+                lastMove = null; beforeMove = null
+                if (moves > 0 && now - lostSince > 4000) {
+                    autoStop("✅ Batalha terminou. Toque ▶ na próxima"); return
+                }
+                status("⏸ Tabuleiro sumiu ($recognized/$total) — animação?")
+                continue
             }
-            badSince = 0L
-            baseline = baseline * 0.85f + light * 0.15f   // acompanha variações pequenas
+            lostSince = 0L
+            // Pokémon novos que apareçam no meio da batalha (disruptions) entram na lista
+            if (known.size < 12) for (l in freeLooks(view, feats, 3)) if (!isKnown(l)) known.add(l)
 
-            // 3) a última jogada funcionou? (se o tabuleiro não mudou, era pedra/bloco: não tentar de novo)
+            // 4) a última jogada funcionou? (se o tabuleiro não mudou, era pedra/bloco: não tentar de novo)
             val lm = lastMove
             val bm = beforeMove
             if (lm != null && bm != null) {
@@ -461,17 +502,17 @@ class BotService : AccessibilityService() {
                 lastMove = null; beforeMove = null
             }
 
-            // 4) escolher e fazer a jogada
+            // 5) escolher e fazer a jogada
             val types = view.types
             val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) }
-            val roles = reader.rolesFor(view, feats, team, prefs.threshold * 1.3f)
+            val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
             val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen, roles)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
-                // talvez tenha bloqueado demais: libera as casas (mas mantém o que aprendeu sobre pedras)
                 failed.clear(); cellFails.fill(0)
-                Thread.sleep(300); continue
+                continue
             }
+            if (!running || System.currentTimeMillis() < userPauseUntil) continue
 
             moves++
             val extra = buildString {
@@ -484,7 +525,7 @@ class BotService : AccessibilityService() {
             beforeMove = feats
             lastMove = mv
             drag(g.center(mv.from), g.center(mv.to), prefs)
-            Thread.sleep(prefs.afterMoveMs.toLong())
+            if (prefs.afterMoveMs > 0) Thread.sleep(prefs.afterMoveMs.toLong())
         }
     }
 
@@ -637,6 +678,7 @@ class BotService : AccessibilityService() {
     private fun drag(a: PointF, b: PointF, prefs: Prefs) {
         val hold = prefs.holdMs.toLong()
         val move = prefs.moveMs.toLong().coerceAtLeast(30)
+        gestureBusyUntil = System.currentTimeMillis() + hold * 2 + move + 400
         if (hold <= 0) {
             dispatchSync(GestureDescription.StrokeDescription(line(a, b), 0, move), move)
             return

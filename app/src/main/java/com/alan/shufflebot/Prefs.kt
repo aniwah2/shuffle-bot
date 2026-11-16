@@ -25,16 +25,16 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putInt("move", v).apply()
     /** Pausa depois de cada jogada (ms). */
     var afterMoveMs: Int
-        get() = sp.getInt("after", 150)
-        set(v) = sp.edit().putInt("after", v).apply()
+        get() = sp.getInt("after2", 0)
+        set(v) = sp.edit().putInt("after2", v).apply()
     /** Diferença máxima para considerar duas casas o mesmo Pokémon. */
     var threshold: Int
         get() = sp.getInt("thr2", 15)
         set(v) = sp.edit().putInt("thr2", v).apply()
     /** Esperar as peças pararem de cair antes de jogar (mais seguro, um pouco mais lento). */
     var waitStable: Boolean
-        get() = sp.getBoolean("stable", true)
-        set(v) = sp.edit().putBoolean("stable", v).apply()
+        get() = sp.getBoolean("stable2", false)
+        set(v) = sp.edit().putBoolean("stable2", v).apply()
 
     var panelX: Int
         get() = sp.getInt("px", 20)

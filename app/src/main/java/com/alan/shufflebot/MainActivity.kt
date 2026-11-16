@@ -64,9 +64,9 @@ class MainActivity : Activity() {
         val thr = numberField("Tolerância para \"mesmo Pokémon\" (padrão 15)", prefs.threshold)
         val move = numberField("Duração do arrasto em ms (padrão 120; mínimo seguro ~60)", prefs.moveMs)
         val hold = numberField("Segurar antes/depois do arrasto em ms (padrão 40; 0 = desliga)", prefs.holdMs)
-        val after = numberField("Pausa depois de cada jogada em ms (padrão 150)", prefs.afterMoveMs)
+        val after = numberField("Pausa depois de cada jogada em ms (padrão 0)", prefs.afterMoveMs)
         val stable = CheckBox(this).apply {
-            text = "Esperar as peças pararem de cair (desligue para ir mais rápido em fases de tempo)"
+            text = "Esperar as peças assentarem (mais preciso, um pouco mais lento; deixe desligado nas fases de tempo)"
             isChecked = prefs.waitStable
         }
         col.addView(stable)
@@ -78,7 +78,7 @@ class MainActivity : Activity() {
                 prefs.threshold = v(thr, 15).coerceIn(5, 60)
                 prefs.moveMs = v(move, 120).coerceIn(30, 2000)
                 prefs.holdMs = v(hold, 40).coerceIn(0, 1000)
-                prefs.afterMoveMs = v(after, 150).coerceIn(0, 3000)
+                prefs.afterMoveMs = v(after, 0).coerceIn(0, 3000)
                 prefs.waitStable = stable.isChecked
                 Toast.makeText(this@MainActivity, "Salvo! Vale a partir do próximo ▶ Iniciar.", Toast.LENGTH_SHORT).show()
             }
