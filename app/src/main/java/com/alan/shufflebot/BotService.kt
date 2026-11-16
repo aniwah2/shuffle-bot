@@ -440,7 +440,10 @@ class BotService : AccessibilityService() {
         val team = prefs.team
 
         // O jogo é o app que estava na frente quando você tocou em Iniciar.
-        val gamePkg = foregroundPkg
+        // Janela de permissão/sistema/o próprio bot na frente NÃO conta como o jogo.
+        fun isSystemPkg(p: String?) = p == null || p == packageName || p == "com.android.systemui" ||
+            p.contains("permissioncontroller") || p.contains("packageinstaller") || p.startsWith("com.miui.securitycenter")
+        var gamePkg: String? = foregroundPkg.takeUnless { isSystemPkg(it) }
 
         // ---- Pokémon DESTA batalha. Só joga se a maior parte das casas forem eles.
         // (Chão do cenário, Pokébola, janela da Great Ball etc. não batem com nenhum e o bot não toca.)
@@ -479,7 +482,8 @@ class BotService : AccessibilityService() {
         while (running) {
             // 0) o jogo ainda está na frente?
             val fg = foregroundPkg
-            if (gamePkg != null && fg != null && fg != gamePkg) {
+            if (gamePkg == null && !isSystemPkg(fg)) gamePkg = fg
+            if (gamePkg != null && fg != null && !isSystemPkg(fg) && fg != gamePkg) {
                 autoStop("⏹ Parado: você saiu do jogo"); return
             }
             // 0b) você tocou na tela: o bot sai do caminho

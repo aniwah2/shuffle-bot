@@ -101,7 +101,7 @@ class FramesTest {
 
     @Test fun dex_reconheceBatalhaDificilENaoMenus() {
         println("== batalhas (devem ser reconhecidas)")
-        for (n in listOf("v71_011", "v71_012", "v72_006", "v72_007", "v73_006", "v73_007", "v73_010", "v6_003", "v5_020", "ex4", "blocos", "v4_060"))
+        for (n in listOf("v71_011", "v71_012", "v72_006", "v72_007", "v73_006", "v73_007", "v73_010", "v6_003", "v5_020", "ex4", "blocos", "v4_060", "v12_005", "v12_041", "v12_061", "v12_081", "v12_121"))
             println("[batalha] $n: ${dexLearn("$n.png")}")
         println("== fora de batalha (NUNCA podem ser reconhecidas)")
         for (n in listOf("v71_003", "v71_005", "v72_045", "v72_050", "v2_100", "v2_110", "v2_122", "v4_030"))
