@@ -41,7 +41,7 @@ class MainActivity : Activity() {
             "1. Toque em \"Ativar serviço\" e ligue o Shuffle Bot em Acessibilidade.\n" +
             "   (Android 13+: se a opção estiver cinza, vá em Configurações › Apps › Shuffle Bot › ⋮ › \"Permitir configurações restritas\" e tente de novo.)\n" +
             "2. Abra o Pokémon Shuffle e entre numa fase.\n" +
-            "3. No painel flutuante, toque em \"Calibrar\", encaixe a grade verde nas 6x6 casas (arraste pelo meio, redimensione pela bolinha amarela) e toque em \"Salvar grade\".\n" +
+            "3. A grade do tabuleiro é encontrada sozinha. Só se ele não reconhecer o tabuleiro, use \"Calibrar\" uma vez (vale para todas as fases).\n" +
             "4. Arraste o painel para fora do tabuleiro e toque em \"▶ Iniciar\".\n\n" +
             "O painel mostra quantos tipos de peça ele está vendo. Se o número estiver maior que o real, aumente a tolerância um pouco (16–18); se estiver menor (confundindo Pokémon parecidos), diminua (12–13). Na dúvida, toque em 📷 no painel e veja o print salvo na Galeria."
         ))

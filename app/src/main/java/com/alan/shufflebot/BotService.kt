@@ -138,7 +138,7 @@ class BotService : AccessibilityService() {
             setTextColor(Color.WHITE); textSize = 13f
         }
         val status = TextView(this).apply {
-            text = if (prefs.geom() == null) "Calibre a grade primeiro" else "Parado"
+            text = "Parado"
             setTextColor(Color.rgb(180, 220, 255)); textSize = 11f
         }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -189,6 +189,10 @@ class BotService : AccessibilityService() {
     // ---------------------------------------------------------------- calibração
 
     private fun screenBounds() = wm.currentWindowMetrics.bounds
+
+    /** Grade salva (se você calibrou) ou a estimativa automática pelo tamanho da tela. */
+    private fun geomOrGuess(prefs: Prefs): BoardGeom =
+        prefs.geom() ?: screenBounds().let { BoardGeom.guess(it.width(), it.height()) }
 
     private fun systemBars(): Insets = wm.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(
         WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
@@ -289,7 +293,7 @@ class BotService : AccessibilityService() {
         }
         if (frame != null) toggleCalibration()
         stopBot()
-        val g = prefs.geom() ?: run { status("Calibre a grade primeiro"); return }
+        val g = geomOrGuess(prefs)
         status("Lendo o tabuleiro…")
         Thread {
             Thread.sleep(400)  // dá tempo do jogo redesenhar
@@ -328,7 +332,6 @@ class BotService : AccessibilityService() {
     private fun startBot() {
         if (frame != null) toggleCalibration()
         if (teamView != null) toggleTeam()
-        if (Prefs(this).geom() == null) { status("Calibre a grade primeiro"); return }
         running = true
         startBtn?.text = "⏸ Parar"
         worker = Thread({
@@ -360,6 +363,17 @@ class BotService : AccessibilityService() {
             val v0 = f0?.let { reader.analyze(it, thr) }
             val p0 = v0?.let { reader.boardProblem(it) } ?: "fora da tela"
             if (p0 == null && v0 != null && v0.types <= 7) return g0      // grade atual já está boa
+            // 1º tenta a estimativa automática pelo tamanho da tela (acerta na maioria dos celulares)
+            val gg = BoardGeom.guess(shot.width, shot.height)
+            if (gg != g0) {
+                val fg = reader.features(shot, gg)
+                val vg = fg?.let { reader.analyze(it, thr, reader.frozenByBorder(shot, gg)) }
+                if (vg != null && reader.boardProblem(vg) == null && (p0 != null || vg.types < (v0?.types ?: 99))) {
+                    prefs.boardLeft = gg.left; prefs.boardTop = gg.top; prefs.boardSize = gg.size
+                    prefs.frameX = -1; prefs.frameY = -1
+                    return gg
+                }
+            }
             status("🔍 Ajustando a grade…")
             val g = runCatching { reader.fitGrid(shot, g0, thr, wide) }.getOrDefault(g0)
             val f1 = reader.features(shot, g) ?: return g0
@@ -378,7 +392,7 @@ class BotService : AccessibilityService() {
     private fun botLoop() {
         val prefs = Prefs(this)
         val reader = BoardReader()
-        var g = prefs.geom() ?: return       // usa a grade salva; só reajusta antes da batalha, se não conseguir ler
+        var g = geomOrGuess(prefs)            // grade salva ou estimada; só reajusta antes da batalha, se não conseguir ler
         var lastFitTry = 0L
         var emptyMovesOff = false        // se soltar em casa vazia não funcionar no jogo, desliga
 
@@ -486,7 +500,7 @@ class BotService : AccessibilityService() {
                         if (boardishSince == 0L) boardishSince = now
                         if (now - boardishSince > 1500) {
                             lastFitTry = now
-                            g = autoFit(prefs, g, reader); prev = null
+                            g = autoFit(prefs, g, reader, wide = true); prev = null
                             continue
                         }
                     } else if (p == null || p.startsWith("quase tudo liso")) boardishSince = 0L
@@ -620,8 +634,7 @@ class BotService : AccessibilityService() {
     private fun saveDebugShot() {
         Thread {
             val prefs = Prefs(this)
-            val g = prefs.geom()
-            if (g == null) { status("Calibre a grade primeiro"); return@Thread }
+            val g = geomOrGuess(prefs)
             var shot = screenshot()
             if (shot == null) { Thread.sleep(400); shot = screenshot() }
             if (shot == null) { status("Não consegui tirar o print"); return@Thread }
