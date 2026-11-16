@@ -91,9 +91,10 @@ class MainActivity : Activity() {
         })
 
         col.addView(Button(this).apply {
-            text = "Resetar calibração da grade"
+            text = "Voltar para a grade automática (apagar calibração)"
             setOnClickListener {
                 prefs.boardSize = 0; prefs.boardLeft = -1; prefs.boardTop = -1
+                prefs.frameX = -1; prefs.frameY = -1; prefs.manualGrid = false
                 Toast.makeText(this@MainActivity, "Calibração apagada", Toast.LENGTH_SHORT).show()
             }
         })

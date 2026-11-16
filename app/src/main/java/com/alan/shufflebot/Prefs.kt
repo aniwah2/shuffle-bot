@@ -73,6 +73,11 @@ class Prefs(ctx: Context) {
             r.name + ":" + f.joinToString(",") { "%.1f".format(java.util.Locale.US, it) }
         }).apply()
 
+    /** true só quando VOCÊ salvou a grade pelo botão Calibrar. Ajustes automáticos nunca são salvos. */
+    var manualGrid: Boolean
+        get() = sp.getBoolean("manualGrid", false)
+        set(v) = sp.edit().putBoolean("manualGrid", v).apply()
+
     fun geom(): BoardGeom? =
         if (boardSize > 0 && boardLeft >= 0 && boardTop >= 0) BoardGeom(boardLeft, boardTop, boardSize) else null
 }

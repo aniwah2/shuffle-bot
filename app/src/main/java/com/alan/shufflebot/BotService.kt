@@ -191,8 +191,10 @@ class BotService : AccessibilityService() {
     private fun screenBounds() = wm.currentWindowMetrics.bounds
 
     /** Grade salva (se você calibrou) ou a estimativa automática pelo tamanho da tela. */
-    private fun geomOrGuess(prefs: Prefs): BoardGeom =
-        prefs.geom() ?: screenBounds().let { BoardGeom.guess(it.width(), it.height()) }
+    private fun geomOrGuess(prefs: Prefs): BoardGeom {
+        val manual = if (prefs.manualGrid) prefs.geom() else null
+        return manual ?: screenBounds().let { BoardGeom.guess(it.width(), it.height()) }
+    }
 
     private fun systemBars(): Insets = wm.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(
         WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
@@ -231,9 +233,11 @@ class BotService : AccessibilityService() {
         if (current == null) {
             stopBot()
             val bounds = screenBounds()
-            val size = if (prefs.boardSize > 0) prefs.boardSize else (bounds.width() * 0.9).toInt()
-            val left = if (prefs.frameX >= 0) prefs.frameX else (bounds.width() - size) / 2
-            val top = if (prefs.frameY >= 0) prefs.frameY else (bounds.height() * 0.45).toInt()
+            // mostra a moldura onde a grade REALMENTE está (a sua calibração, ou a estimativa automática)
+            val cur = geomOrGuess(prefs)
+            val size = cur.size
+            val left = if (prefs.manualGrid && prefs.frameX >= 0) prefs.frameX else cur.left
+            val top = if (prefs.manualGrid && prefs.frameY >= 0) prefs.frameY else cur.top
 
             val v = GridFrameView(this)
             val p = overlayParams(size, size).apply { x = left; y = top }
@@ -265,11 +269,13 @@ class BotService : AccessibilityService() {
             frameLp = null
             calibBtn?.text = "Calibrar"
             status(if (warn) "Salva, mas confira: parte da grade está na barra do sistema" else "✅ Grade salva. Pode iniciar!")
-            // refina a calibração uma única vez, agora, se o tabuleiro estiver na tela
+            prefs.manualGrid = true
+            // refina a calibração uma única vez, agora, se o tabuleiro estiver na tela (e salva, porque foi você que calibrou)
             Thread {
                 Thread.sleep(500)
                 val g0 = prefs.geom() ?: return@Thread
-                val g = autoFit(prefs, g0, BoardReader(), wide = true)
+                val g = autoFit(prefs, g0, BoardReader(), wide = true, useDex = prefs.useDex && runCatching { Dex.load(this) }.isSuccess)
+                if (g != g0) { prefs.boardLeft = g.left; prefs.boardTop = g.top; prefs.boardSize = g.size; prefs.frameX = -1; prefs.frameY = -1 }
                 status(if (g != g0) "✅ Grade salva e ajustada. Pode iniciar!" else "✅ Grade salva. Pode iniciar!")
             }.start()
         }
@@ -355,35 +361,27 @@ class BotService : AccessibilityService() {
      * Tenta ajustar a grade, mas SÓ aceita (e salva) se a tela atual for claramente um tabuleiro
      * e a grade nova reconhecer melhor que a atual. Em menus/animações não muda nada.
      */
-    private fun autoFit(prefs: Prefs, g0: BoardGeom, reader: BoardReader, wide: Boolean = false): BoardGeom {
+    /**
+     * Tenta achar uma grade melhor no print atual. Só aceita se ler o tabuleiro claramente melhor
+     * (com a Dex: mais Pokémon reconhecidos). O resultado vale só para esta execução — nunca é salvo.
+     */
+    private fun autoFit(prefs: Prefs, g0: BoardGeom, reader: BoardReader, wide: Boolean = false, useDex: Boolean = false): BoardGeom {
         val shot = screenshotRetry() ?: return g0
         try {
             val thr = prefs.threshold.toFloat()
-            val f0 = reader.features(shot, g0)
-            val v0 = f0?.let { reader.analyze(it, thr) }
-            val p0 = v0?.let { reader.boardProblem(it) } ?: "fora da tela"
-            if (p0 == null && v0 != null && v0.types <= 7) return g0      // grade atual já está boa
-            // 1º tenta a estimativa automática pelo tamanho da tela (acerta na maioria dos celulares)
+            val s0 = boardScore(reader, shot, g0, thr, useDex)
             val gg = BoardGeom.guess(shot.width, shot.height)
-            if (gg != g0) {
-                val fg = reader.features(shot, gg)
-                val vg = fg?.let { reader.analyze(it, thr, reader.frozenByBorder(shot, gg)) }
-                if (vg != null && reader.boardProblem(vg) == null && (p0 != null || vg.types < (v0?.types ?: 99))) {
-                    prefs.boardLeft = gg.left; prefs.boardTop = gg.top; prefs.boardSize = gg.size
-                    prefs.frameX = -1; prefs.frameY = -1
-                    return gg
-                }
-            }
+            if (gg != g0 && boardScore(reader, shot, gg, thr, useDex) > s0) return gg
+            if (useDex && s0 >= 2) return g0            // já reconhece o time: não mexe
             status("🔍 Ajustando a grade…")
             val g = runCatching { reader.fitGrid(shot, g0, thr, wide) }.getOrDefault(g0)
-            val f1 = reader.features(shot, g) ?: return g0
-            val v1 = reader.analyze(f1, thr)
-            val ok = reader.boardProblem(v1) == null && (p0 != null || v1.types < (v0?.types ?: 99))
-            if (!ok || g == g0) return g0
-            prefs.frameX = (if (prefs.frameX >= 0) prefs.frameX else g0.left) + (g.left - g0.left)
-            prefs.frameY = (if (prefs.frameY >= 0) prefs.frameY else g0.top) + (g.top - g0.top)
-            prefs.boardLeft = g.left; prefs.boardTop = g.top; prefs.boardSize = g.size
-            return g
+            if (g == g0) return g0
+            val s1 = boardScore(reader, shot, g, thr, useDex)
+            val ok = if (useDex) s1 >= 2 && s1 > s0 else {
+                val v1 = reader.features(shot, g)?.let { reader.analyze(it, thr, reader.frozenByBorder(shot, g)) }
+                v1 != null && reader.boardProblem(v1) == null && s1 > s0
+            }
+            return if (ok) g else g0
         } finally {
             shot.recycle()
         }
@@ -472,8 +470,7 @@ class BotService : AccessibilityService() {
                     val sCur = boardScore(reader, bmp, g, thr, useDex)
                     val sGuess = boardScore(reader, bmp, gg, thr, useDex)
                     if (sGuess > sCur) {
-                        g = gg; prefs.boardLeft = gg.left; prefs.boardTop = gg.top; prefs.boardSize = gg.size
-                        prefs.frameX = -1; prefs.frameY = -1
+                        g = gg
                         f0 = reader.features(bmp, g); b0 = f0?.let { reader.frozenByBorder(bmp, g) }
                         prev = null
                     }
@@ -525,7 +522,7 @@ class BotService : AccessibilityService() {
                         if (boardishSince == 0L) boardishSince = now
                         if (now - boardishSince > 1500) {
                             lastFitTry = now
-                            g = autoFit(prefs, g, reader, wide = true); prev = null
+                            g = autoFit(prefs, g, reader, wide = true, useDex = useDex); prev = null
                             continue
                         }
                     } else if (p == null || p.startsWith("quase tudo liso")) boardishSince = 0L
