@@ -390,6 +390,8 @@ class BotService : AccessibilityService() {
         fun isKnown(f: FloatArray) = known.any { reader.dist(it, f) < knownThr }
         var candidate: List<FloatArray>? = null
         var candidateStreak = 0
+        var adopt: List<FloatArray>? = null      // Pokémon novos no meio da batalha (ex.: Mega evoluiu)
+        var adoptStreak = 0
         val waitingSince = System.currentTimeMillis()
 
         var prev: Array<FloatArray>? = null
@@ -479,9 +481,22 @@ class BotService : AccessibilityService() {
             val recognized = (0 until total).count { knownFree[it] || (view.frozen[it] && view.species[it] in knownSpecies) }
             val needed = maxOf(8, (total - view.blocks) / 2)
             if (recognized < needed || view.empty > 6) {
+                // Parte do tabuleiro ainda é conhecida e o resto forma Pokémon consistentes (o Mega evoluiu e
+                // mudou de ícone, ou entrou Pokémon novo): se isso se repetir em 2 prints seguidos, aprende.
+                val partial = recognized >= maxOf(6, (total - view.blocks) * 3 / 10)
+                val newLooks = if (partial && view.empty <= 2 && reader.boardProblem(view) == null)
+                    freeLooks(view, feats, 3).filter { !isKnown(it) } else emptyList()
+                if (newLooks.isNotEmpty() && known.size < 14) {
+                    val prevA = adopt
+                    val same = prevA != null && newLooks.all { l -> prevA.any { reader.dist(it, l) < knownThr } }
+                    adoptStreak = if (same) adoptStreak + 1 else 0
+                    adopt = newLooks
+                    if (adoptStreak >= 1) { known.addAll(newLooks); adopt = null; adoptStreak = 0; continue }
+                } else { adopt = null; adoptStreak = 0 }
+
                 if (lostSince == 0L) lostSince = now
                 lastMove = null; beforeMove = null
-                if (moves > 0 && now - lostSince > 4000) {
+                if (moves > 0 && now - lostSince > 6000) {
                     autoStop("✅ Batalha terminou. Toque ▶ na próxima"); return
                 }
                 status("⏸ Tabuleiro sumiu ($recognized/$needed) — animação?")
