@@ -315,9 +315,9 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
         }
 
         val L = g.left.toFloat(); val T = g.top.toFloat(); val S = g.size.toFloat()
-        var bestS = score(L, T, S, 3); var bL = L; var bT = T; var bSz = S
-        var k = -0.15f
-        while (k <= 0.1501f) {
+        var bestS = score(L, T, S, 4); var bL = L; var bT = T; var bSz = S
+        var k = -0.12f
+        while (k <= 0.1201f) {
             val sz = S * (1 + k); val cs = sz / g.n
             var ox = -0.5f
             while (ox <= 0.501f) {
@@ -325,13 +325,13 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
                 while (oy <= 0.501f) {
                     val l = L + (S - sz) / 2 + ox * cs
                     val t = T + (S - sz) / 2 + oy * cs
-                    val sc = score(l, t, sz, 3)
+                    val sc = score(l, t, sz, 4)
                     if (sc < bestS) { bestS = sc; bL = l; bT = t; bSz = sz }
-                    oy += 0.125f
+                    oy += 0.25f
                 }
-                ox += 0.125f
+                ox += 0.25f
             }
-            k += 0.015f
+            k += 0.01f
         }
         // refino fino com todos os pixels
         val L0 = bL; val T0 = bT; val S0 = bSz

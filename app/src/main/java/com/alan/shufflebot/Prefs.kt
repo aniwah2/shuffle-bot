@@ -54,7 +54,7 @@ class Prefs(ctx: Context) {
     /** Time marcado: lista de (papel, aparência média da espécie). */
     var team: List<Pair<Role, FloatArray>>
         get() {
-            val raw = sp.getString("team", "") ?: ""
+            val raw = sp.getString("team2", "") ?: ""
             if (raw.isBlank()) return emptyList()
             return raw.split(";").mapNotNull { e ->
                 val parts = e.split(":")
@@ -64,7 +64,7 @@ class Prefs(ctx: Context) {
                 Pair(role, f)
             }
         }
-        set(v) = sp.edit().putString("team", v.joinToString(";") { (r, f) ->
+        set(v) = sp.edit().putString("team2", v.joinToString(";") { (r, f) ->
             r.name + ":" + f.joinToString(",") { "%.1f".format(java.util.Locale.US, it) }
         }).apply()
 

@@ -239,6 +239,13 @@ class BotService : AccessibilityService() {
             frameLp = null
             calibBtn?.text = "Calibrar"
             status(if (warn) "Salva, mas confira: parte da grade está na barra do sistema" else "✅ Grade salva. Pode iniciar!")
+            // refina a calibração uma única vez, agora, se o tabuleiro estiver na tela
+            Thread {
+                Thread.sleep(500)
+                val g0 = prefs.geom() ?: return@Thread
+                val g = autoFit(prefs, g0, BoardReader())
+                status(if (g != g0) "✅ Grade salva e ajustada. Pode iniciar!" else "✅ Grade salva. Pode iniciar!")
+            }.start()
         }
     }
 
@@ -270,6 +277,10 @@ class BotService : AccessibilityService() {
             shot.recycle()
             if (feats == null) { status("Grade fora da tela — recalibre"); return@Thread }
             val view = reader.analyze(feats, prefs.threshold.toFloat())
+            if (reader.boardProblem(view) != null) {
+                status("Abra uma batalha (tabuleiro na tela) para marcar o time")
+                return@Thread
+            }
             val looks = reader.speciesLook(view, feats)
             // papéis já salvos aparecem marcados
             val roles = HashMap<Int, Role>()
@@ -315,25 +326,38 @@ class BotService : AccessibilityService() {
 
     // ---------------------------------------------------------------- loop principal
 
-    /** Ajusta a grade automaticamente e salva o resultado. */
+    /**
+     * Tenta ajustar a grade, mas SÓ aceita (e salva) se a tela atual for claramente um tabuleiro
+     * e a grade nova reconhecer melhor que a atual. Em menus/animações não muda nada.
+     */
     private fun autoFit(prefs: Prefs, g0: BoardGeom, reader: BoardReader): BoardGeom {
-        status("🔍 Ajustando a grade…")
         val shot = screenshot() ?: return g0
-        val g = runCatching { reader.fitGrid(shot, g0, prefs.threshold.toFloat()) }.getOrDefault(g0)
-        shot.recycle()
-        if (g != g0) {
+        try {
+            val thr = prefs.threshold.toFloat()
+            val f0 = reader.features(shot, g0)
+            val v0 = f0?.let { reader.analyze(it, thr) }
+            val p0 = v0?.let { reader.boardProblem(it) } ?: "fora da tela"
+            if (p0 == null && v0 != null && v0.types <= 7) return g0      // grade atual já está boa
+            status("🔍 Ajustando a grade…")
+            val g = runCatching { reader.fitGrid(shot, g0, thr) }.getOrDefault(g0)
+            val f1 = reader.features(shot, g) ?: return g0
+            val v1 = reader.analyze(f1, thr)
+            val ok = reader.boardProblem(v1) == null && (p0 != null || v1.types < (v0?.types ?: 99))
+            if (!ok || g == g0) return g0
             prefs.frameX = (if (prefs.frameX >= 0) prefs.frameX else g0.left) + (g.left - g0.left)
             prefs.frameY = (if (prefs.frameY >= 0) prefs.frameY else g0.top) + (g.top - g0.top)
             prefs.boardLeft = g.left; prefs.boardTop = g.top; prefs.boardSize = g.size
+            return g
+        } finally {
+            shot.recycle()
         }
-        return g
     }
 
     private fun botLoop() {
         val prefs = Prefs(this)
         val reader = BoardReader()
-        var g = autoFit(prefs, prefs.geom() ?: return, reader)
-        var lastFit = System.currentTimeMillis()
+        var g = prefs.geom() ?: return       // usa a grade salva; não reajusta ao iniciar
+        var lastFit = 0L
         val total = g.n * g.n
 
         val team = prefs.team
@@ -367,11 +391,11 @@ class BotService : AccessibilityService() {
         fun bad(reason: String): Boolean {
             val now = System.currentTimeMillis()
             if (badSince == 0L) badSince = now
-            if (now - badSince > 90_000) {
-                autoStop("⏹ Parado: 1 min e meio sem ver o tabuleiro")
+            if (now - badSince > 300_000) {
+                autoStop("⏹ Parado: 5 min sem ver o tabuleiro")
                 return true
             }
-            status("⏸ Pausado: $reason")
+            status("⏸ $reason")
             return false
         }
 
@@ -391,9 +415,9 @@ class BotService : AccessibilityService() {
             // 1) esperar as peças pararem de cair (se a tela nunca para, não joga)
             val p0 = prev
             prev = feats
-            if (prefs.waitStable && (p0 == null || reader.changedCells(p0, feats) > 1)) {
+            // brilhos e animações pequenas não contam; espera no máximo 2 prints e depois joga mesmo assim
+            if (prefs.waitStable && unstable < 2 && p0 != null && reader.changedCells(p0, feats, 30f) > 3) {
                 unstable++
-                if (unstable >= 4 && bad("tela mexendo")) return
                 continue
             }
             unstable = 0
@@ -404,17 +428,17 @@ class BotService : AccessibilityService() {
             if (problem != null) {
                 // pode ser a grade desalinhada: tenta reajustar (no máximo a cada 20 s)
                 val now = System.currentTimeMillis()
-                if (badSince != 0L && now - badSince > 2500 && now - lastFit > 20_000) {
+                if (badSince != 0L && now - badSince > 3000 && now - lastFit > 30_000) {
                     g = autoFit(prefs, g, reader); lastFit = now; prev = null
                     continue
                 }
-                if (bad(problem)) return; Thread.sleep(150); continue
+                if (bad("aguardando o tabuleiro ($problem)")) return; Thread.sleep(150); continue
             }
 
             val light = reader.brightness(feats)
             if (baseline < 0) baseline = light
-            if (light < baseline * 0.7f || light > baseline * 1.4f) {
-                if (bad("tela escureceu/mudou")) return
+            if (light < baseline * 0.6f) {
+                if (bad("tela escureceu (janela?)")) return
                 Thread.sleep(150); continue
             }
             badSince = 0L
