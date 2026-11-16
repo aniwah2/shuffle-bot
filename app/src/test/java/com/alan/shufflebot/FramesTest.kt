@@ -108,6 +108,24 @@ class FramesTest {
             println("[fora] $n: ${dexLearn("$n.png", 3)}")
     }
 
+    @Test fun tempoPorQuadro() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val r = BoardReader()
+        val img = load("v10_s4.png"); val g = BoardGeom.guess(img.width, img.height)
+        fun once(): Long {
+            val t0 = System.nanoTime()
+            val f = r.features(img, g)!!
+            val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            val names = r.speciesLook(v, f).mapValues { Dex.identify(it.value) }
+            val sp = IntArray(36) { v.species[it] }
+            Solver.best(sp, 6, emptySet(), BooleanArray(36) { !v.movable[it] }, v.frozen)
+            return (System.nanoTime() - t0) / 1_000_000
+        }
+        repeat(5) { once() }
+        val ts = (1..20).map { once() }.sorted()
+        println("[tempo] por quadro (computador do GitHub): mediana ${ts[10]} ms, pior ${ts.last()} ms")
+    }
+
     @Test fun xerneas_semJogada() {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val r = BoardReader(); val l = BattleLearner(r)
