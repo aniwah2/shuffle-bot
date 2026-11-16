@@ -265,7 +265,7 @@ class BotService : AccessibilityService() {
             Thread {
                 Thread.sleep(500)
                 val g0 = prefs.geom() ?: return@Thread
-                val g = autoFit(prefs, g0, BoardReader())
+                val g = autoFit(prefs, g0, BoardReader(), wide = true)
                 status(if (g != g0) "✅ Grade salva e ajustada. Pode iniciar!" else "✅ Grade salva. Pode iniciar!")
             }.start()
         }
@@ -352,7 +352,7 @@ class BotService : AccessibilityService() {
      * Tenta ajustar a grade, mas SÓ aceita (e salva) se a tela atual for claramente um tabuleiro
      * e a grade nova reconhecer melhor que a atual. Em menus/animações não muda nada.
      */
-    private fun autoFit(prefs: Prefs, g0: BoardGeom, reader: BoardReader): BoardGeom {
+    private fun autoFit(prefs: Prefs, g0: BoardGeom, reader: BoardReader, wide: Boolean = false): BoardGeom {
         val shot = screenshot() ?: return g0
         try {
             val thr = prefs.threshold.toFloat()
@@ -361,7 +361,7 @@ class BotService : AccessibilityService() {
             val p0 = v0?.let { reader.boardProblem(it) } ?: "fora da tela"
             if (p0 == null && v0 != null && v0.types <= 7) return g0      // grade atual já está boa
             status("🔍 Ajustando a grade…")
-            val g = runCatching { reader.fitGrid(shot, g0, thr) }.getOrDefault(g0)
+            val g = runCatching { reader.fitGrid(shot, g0, thr, wide) }.getOrDefault(g0)
             val f1 = reader.features(shot, g) ?: return g0
             val v1 = reader.analyze(f1, thr)
             val ok = reader.boardProblem(v1) == null && (p0 != null || v1.types < (v0?.types ?: 99))

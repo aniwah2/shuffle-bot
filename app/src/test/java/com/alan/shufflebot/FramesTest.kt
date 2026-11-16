@@ -84,6 +84,18 @@ class FramesTest {
         println("v5 aprendidos: ${learner.known.size}")
     }
 
+    @Test fun ajusteLargo_corrigeGradeDeslocada() {
+        val img = load("v5_020.png")
+        val r = BoardReader()
+        for ((dx, dy) in listOf(0 to 120, 0 to -150, 60 to 100, -80 to -80)) {
+            val wrong = BoardGeom(14 + dx, 1208 + dy, 1052)
+            val curto = r.fitGrid(img, wrong, 15f, wide = false)
+            val largo = r.fitGrid(img, wrong, 15f, wide = true)
+            fun tipos(g: BoardGeom) = r.features(img, g)?.let { r.analyze(it, 15f, r.frozenByBorder(img, g)).types } ?: -1
+            println("[ajuste] desvio ($dx,$dy): curto -> $curto tipos=${tipos(curto)} | largo -> $largo tipos=${tipos(largo)}")
+        }
+    }
+
     @Test fun video4_e_prints() {
         val g = BoardGeom(20, 1364, 1240)
         val learner = BattleLearner(BoardReader())

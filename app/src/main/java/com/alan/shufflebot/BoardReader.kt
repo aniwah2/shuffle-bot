@@ -357,13 +357,15 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
      * Procura a posição/tamanho de grade em que as casas ficam mais "organizadas"
      * (menos tipos diferentes e peças iguais bem parecidas). Corrige calibração imprecisa.
      */
-    fun fitGrid(bmp: Bitmap, g: BoardGeom, thr: Float): BoardGeom {
+    fun fitGrid(bmp: Bitmap, g: BoardGeom, thr: Float, wide: Boolean = false): BoardGeom {
         val px = IntArray(bmp.width * bmp.height)
         bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-        return fitGrid(ArrayImg(bmp.width, bmp.height, px), g, thr)
+        return fitGrid(ArrayImg(bmp.width, bmp.height, px), g, thr, wide)
     }
 
-    fun fitGrid(img: ArrayImg, g: BoardGeom, thr: Float): BoardGeom {
+    /** [wide]: procura até 1 casa inteira para cada lado (usado ao salvar a calibração). */
+    fun fitGrid(img: ArrayImg, g: BoardGeom, thr: Float, wide: Boolean = false): BoardGeom {
+        val range = if (wide) 1.0f else 0.5f
         val W = img.width
         val H = img.height
         val px = img.px
@@ -388,10 +390,10 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
         var k = -0.12f
         while (k <= 0.1201f) {
             val sz = S * (1 + k); val cs = sz / g.n
-            var ox = -0.5f
-            while (ox <= 0.501f) {
-                var oy = -0.5f
-                while (oy <= 0.501f) {
+            var ox = -range
+            while (ox <= range + 0.001f) {
+                var oy = -range
+                while (oy <= range + 0.001f) {
                     val l = L + (S - sz) / 2 + ox * cs
                     val t = T + (S - sz) / 2 + oy * cs
                     val sc = score(l, t, sz, 4)
