@@ -415,7 +415,8 @@ class BotService : AccessibilityService() {
         /** Aparência média das espécies livres com pelo menos [minCells] casas. */
         fun freeLooks(view: BoardView, feats: Array<FloatArray>, minCells: Int): List<FloatArray> {
             val cnt = HashMap<Int, Int>()
-            for (i in 0 until total) if (view.movable[i] && view.species[i] >= 0) cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
+            // conta livres + congelados da espécie (fases cheias de gelo); a aparência vem só dos livres
+            for (i in 0 until total) if ((view.movable[i] || view.frozen[i]) && view.species[i] >= 0) cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
             val looks = reader.speciesLook(view, feats)
             return cnt.filter { it.value >= minCells }.keys.mapNotNull { looks[it] }
         }
@@ -471,14 +472,19 @@ class BotService : AccessibilityService() {
             }
 
             // 3) é mesmo o tabuleiro desta batalha?
-            val recognized = feats.count { isKnown(it) }
-            if (recognized < total / 2 || view.empty > 6) {
+            // casas reconhecidas: Pokémon livres conhecidos + congelados dessas mesmas espécies.
+            // Blocos não contam a favor nem contra (fases com muitos blocos).
+            val knownFree = BooleanArray(total) { view.movable[it] && isKnown(feats[it]) }
+            val knownSpecies = (0 until total).filter { knownFree[it] }.map { view.species[it] }.toHashSet()
+            val recognized = (0 until total).count { knownFree[it] || (view.frozen[it] && view.species[it] in knownSpecies) }
+            val needed = maxOf(8, (total - view.blocks) / 2)
+            if (recognized < needed || view.empty > 6) {
                 if (lostSince == 0L) lostSince = now
                 lastMove = null; beforeMove = null
                 if (moves > 0 && now - lostSince > 4000) {
                     autoStop("✅ Batalha terminou. Toque ▶ na próxima"); return
                 }
-                status("⏸ Tabuleiro sumiu ($recognized/$total) — animação?")
+                status("⏸ Tabuleiro sumiu ($recognized/$needed) — animação?")
                 continue
             }
             lostSince = 0L
