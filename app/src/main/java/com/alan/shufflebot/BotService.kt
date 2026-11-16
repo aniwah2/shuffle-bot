@@ -585,7 +585,11 @@ class BotService : AccessibilityService() {
             val lm = lastMove
             val bm = beforeMove
             if (lm != null && bm != null) {
-                val moved = reader.dist(bm[lm.from], feats[lm.from]) > 25f || reader.dist(bm[lm.to], feats[lm.to]) > 25f
+                // Funcionou = o Pokémon arrastado apareceu no destino, OU o tabuleiro mudou de verdade incluindo as
+                // casas mexidas. (Nuvem/efeito se mexendo sozinho não conta como jogada que funcionou.)
+                val arrived = reader.dist(feats[lm.to], bm[lm.from]) < knownThr
+                val cellsChanged = reader.dist(bm[lm.from], feats[lm.from]) > 25f || reader.dist(bm[lm.to], feats[lm.to]) > 25f
+                val moved = arrived || (cellsChanged && reader.changedCells(bm, feats, 30f) >= 4)
                 val wasEmptyMove = lm.toEmpty
                 if (wasEmptyMove) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
                 if (!moved) {
@@ -612,7 +616,13 @@ class BotService : AccessibilityService() {
                 for (k in known.indices) { val d = reader.dist(known[k], f); if (d < bd) { bd = d; bi = k } }
                 return bi >= 0 && bd < knownThr && knownEntry.getOrNull(bi) == null
             }
-            val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
+            // Só mexe em casas onde reconhece um Pokémon desta batalha. Nuvem, caixote, bloco, o botão do gravador
+            // de tela ou qualquer outra coisa por cima ficam de fora (nem arrasta, nem conta como combinação).
+            val blocked = BooleanArray(total) { !knownFree[it] || !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
+            val solverSpecies = IntArray(total) { i ->
+                val sp = view.species[i]
+                if (sp >= 0 && (knownFree[i] || (view.frozen[i] && sp in knownSpecies))) sp else -(i + 1)
+            }
             val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
             var value: SpeciesValue? = null
             var dexTxt = ""
@@ -631,7 +641,7 @@ class BotService : AccessibilityService() {
                 value = SpeciesValue.from(ents, opp, disruptions, megaEvolved)
                 if (opp != null) dexTxt = " • vs ${opp.name}"
             }
-            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen, roles, emptyCells, value)
+            val mv = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
                 failed.clear(); cellFails.fill(0)
