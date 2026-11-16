@@ -84,6 +84,17 @@ class FramesTest {
         println("v5 aprendidos: ${learner.known.size}")
     }
 
+    @Test fun semCalibracao_estimaEAjusta() {
+        val r = BoardReader()
+        for (name in listOf("v5_020.png", "v4_060.png", "ex4.png", "blocos.png")) {
+            val img = load(name)
+            val guess = BoardGeom.guess(img.width, img.height)
+            val fit = r.fitGrid(img, guess, 15f, wide = true)
+            fun tipos(g: BoardGeom) = r.features(img, g)?.let { val v = r.analyze(it, 15f, r.frozenByBorder(img, g)); "${v.types} tipos, problema=${r.boardProblem(v)}" } ?: "fora"
+            println("[auto] $name ${img.width}x${img.height}: estimativa $guess -> ${tipos(guess)} | ajustada $fit -> ${tipos(fit)}")
+        }
+    }
+
     @Test fun ajusteLargo_corrigeGradeDeslocada() {
         val img = load("v5_020.png")
         val r = BoardReader()

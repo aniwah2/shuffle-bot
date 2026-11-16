@@ -28,6 +28,13 @@ class ArrayImg(override val width: Int, override val height: Int, val px: IntArr
 
 /** Posição do tabuleiro na tela (em pixels). O tabuleiro é quadrado, N x N casas. */
 data class BoardGeom(val left: Int, val top: Int, val size: Int, val n: Int = 6) {
+    companion object {
+        /** Estimativa sem calibração: o tabuleiro ocupa ~97% da largura e termina logo acima da barra de navegação. */
+        fun guess(w: Int, h: Int): BoardGeom {
+            val size = (w * 0.97f).toInt()
+            return BoardGeom((w - size) / 2, (h * 0.94f).toInt() - size, size)
+        }
+    }
     val cell: Float get() = size.toFloat() / n
     fun center(index: Int): PointF {
         val r = index / n
