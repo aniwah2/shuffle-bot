@@ -360,6 +360,7 @@ class BotService : AccessibilityService() {
     }
 
     private fun launchWorker() {
+        extraHold = 0; extraMove = 0
         running = true
         startBtn?.text = "⏸ Parar"
         worker = Thread({
@@ -451,8 +452,7 @@ class BotService : AccessibilityService() {
         var prev: Array<FloatArray>? = null
         var lastMove: Move? = null
         var moveDoneAt = 0L              // quando o último arrasto terminou
-        var lastNormal: Move? = null     // última troca normal que ainda não mostrou efeito
-        var lastNormalBefore: Array<FloatArray>? = null
+        val recent = ArrayDeque<Boolean>()   // últimas jogadas: pegou ou não no jogo
         var beforeMove: Array<FloatArray>? = null
         val failed = HashSet<Long>()
         val cellFails = IntArray(total)
@@ -625,27 +625,26 @@ class BotService : AccessibilityService() {
                 known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
             }
 
-            // 4) a última jogada funcionou?
-            //    Trocas normais (Pokémon do time reconhecidos): NÃO espera — se não funcionou, percebe na próxima
-            //    decisão (ia repetir a mesma troca com o tabuleiro igual) e descarta só essa troca.
-            //    Tentativas incertas (casa vazia / embaixo de nuvem): espera o jogo processar para saber se valeu.
+            // 4) a última jogada pegou no jogo? Espera a REAÇÃO do jogo (tabuleiro mudar), não um tempo fixo:
+            //    o jogo costuma reagir em 0,1–0,2 s; se não mudar em ~0,45 s, a jogada não pegou.
             val lm = lastMove
             val bm = beforeMove
             if (lm != null && bm != null) {
-                if (lm.toEmpty) {
-                    if (now - moveDoneAt < 550) { Thread.sleep(40); continue }
-                    val arrived = reader.dist(feats[lm.to], bm[lm.from]) < knownThr
-                    val cellsChanged = reader.dist(bm[lm.from], feats[lm.from]) > 25f || reader.dist(bm[lm.to], feats[lm.to]) > 25f
-                    val moved = arrived || (cellsChanged && reader.changedCells(bm, feats, 30f) >= 4)
-                    if (lm.explore) { if (moved) cloudOk++ else cloudFails++; if (cloudFails >= 4 && cloudOk == 0) cloudOff = true }
-                    else { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
-                    if (moved) { megaCount += lastMegaCells; failed.clear(); cellFails.fill(0) }
-                    else { failed.add(lm.key); cellFails[lm.to]++ }
-                } else {
-                    if (reader.changedCells(bm, feats, 30f) >= 4) {
-                        megaCount += lastMegaCells; failed.clear(); cellFails.fill(0); lastNormal = null
-                    } else {
-                        lastNormal = lm; lastNormalBefore = bm   // talvez o jogo só não processou ainda
+                val arrived = reader.dist(feats[lm.to], bm[lm.from]) < knownThr
+                val moved = arrived || reader.changedCells(bm, feats, 30f) >= 3
+                val limit = if (lm.toEmpty) 650 else 450
+                if (!moved && now - moveDoneAt < limit) { Thread.sleep(10); continue }
+                recent.addLast(moved); if (recent.size > 6) recent.removeFirst()
+                if (lm.explore) { if (moved) cloudOk++ else cloudFails++; if (cloudFails >= 4 && cloudOk == 0) cloudOff = true }
+                else if (lm.toEmpty) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
+                if (moved) { megaCount += lastMegaCells; failed.clear(); cellFails.fill(0) }
+                else {
+                    failed.add(lm.key)
+                    // vários arrastos seguidos sem pegar (e não eram tentativas incertas): o arrasto está curto demais
+                    if (!lm.toEmpty && recent.size >= 4 && recent.takeLast(4).count { !it } >= 3 && extraHold < 80) {
+                        extraHold += 20; extraMove += 40; recent.clear()
+                        failed.clear(); cellFails.fill(0)
+                        status("Ajustando o arrasto (o jogo não estava aceitando)…")
                     }
                 }
                 lastMove = null; beforeMove = null
@@ -713,13 +712,7 @@ class BotService : AccessibilityService() {
             }
             fun bestMove() = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
                 if (useDex) dkind else null, exploreCells)
-            var mv = bestMove()
-            // ia repetir a mesma troca e o tabuleiro não mudou desde então: ela não funcionou → descarta e escolhe outra
-            val ln = lastNormal; val lb = lastNormalBefore
-            if (mv != null && ln != null && lb != null && mv.key == ln.key && reader.changedCells(lb, feats, 30f) < 3) {
-                failed.add(mv.key); lastNormal = null
-                mv = bestMove()
-            } else if (ln != null && lb != null && reader.changedCells(lb, feats, 30f) >= 4) lastNormal = null
+            val mv = bestMove()
             lastMegaCells = 0
             if (mv != null && useDex) {
                 val mb = knownEntry.firstOrNull { it != null && !it.isMega && Dex.megaOf(it) != null }?.baseName
@@ -1012,9 +1005,14 @@ class BotService : AccessibilityService() {
         return ok
     }
 
+    /** Acréscimo automático no arrasto quando o jogo não está aceitando (vale até o bot parar). */
+    @Volatile private var extraHold = 0
+    @Volatile private var extraMove = 0
+
     private fun drag(a: PointF, b: PointF, prefs: Prefs) {
-        val hold = prefs.holdMs.toLong()
-        val move = prefs.moveMs.toLong().coerceAtLeast(30)
+        // mínimos que o jogo aceitou nos testes; o bot aumenta sozinho se os arrastos não pegarem
+        val hold = (maxOf(prefs.holdMs, 30) + extraHold).toLong()
+        val move = (maxOf(prefs.moveMs, 80) + extraMove).toLong()
         gestureBusyUntil = System.currentTimeMillis() + hold * 2 + move + 400
         if (hold <= 0) {
             dispatchSync(GestureDescription.StrokeDescription(line(a, b), 0, move), move)

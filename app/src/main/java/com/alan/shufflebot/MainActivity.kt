@@ -64,8 +64,8 @@ class MainActivity : Activity() {
             }
         }
         val thr = numberField("Tolerância para \"mesmo Pokémon\" (padrão 15)", prefs.threshold)
-        val move = numberField("Duração do arrasto em ms (padrão 120; mínimo seguro ~60)", prefs.moveMs)
-        val hold = numberField("Segurar antes/depois do arrasto em ms (padrão 40; 0 = desliga)", prefs.holdMs)
+        val move = numberField("Duração do arrasto em ms (padrão 120; mínimo 80)", prefs.moveMs)
+        val hold = numberField("Segurar antes/depois do arrasto em ms (padrão 40; mínimo 30 — o bot aumenta sozinho se o jogo não aceitar)", prefs.holdMs)
         val after = numberField("Pausa depois de cada jogada em ms (padrão 0)", prefs.afterMoveMs)
         val stable = CheckBox(this).apply {
             text = "Esperar as peças assentarem (mais preciso, um pouco mais lento; deixe desligado nas fases de tempo)"
