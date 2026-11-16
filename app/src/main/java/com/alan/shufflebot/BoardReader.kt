@@ -133,7 +133,7 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
         val reps = Array(k) { FloatArray(dim) }
         val cnt = IntArray(k)
         for (i in feats.indices) { cnt[lab[i]]++; for (j in 0 until dim) reps[lab[i]][j] += feats[i][j] }
-        for (c in 0 until k) for (j in 0 until dim) reps[c][j] /= cnt[c].coerceAtLeast(1)
+        for (c in 0 until k) { val m = cnt[c].coerceAtLeast(1).toFloat(); for (j in 0 until dim) reps[c][j] = reps[c][j] / m }
 
         val nb = dim / 3
         val bright = FloatArray(k)
