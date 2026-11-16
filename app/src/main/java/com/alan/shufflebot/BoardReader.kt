@@ -98,4 +98,34 @@ class BoardReader(private val blocks: Int = 4, private val inset: Float = 0.18f)
         }
         return labels
     }
+
+    /** Brilho médio do tabuleiro (0..255). Escurece quando o jogo abre uma janela por cima. */
+    fun brightness(feats: Array<FloatArray>): Float {
+        var s = 0f
+        var n = 0
+        for (f in feats) for (v in f) { s += v; n++ }
+        return if (n == 0) 0f else s / n
+    }
+
+    /**
+     * Confere se os rótulos parecem um tabuleiro de verdade: poucos tipos, todos repetidos várias vezes
+     * e nenhum dominando (um fundo liso de menu/janela vira um "tipo" gigante).
+     * Retorna null se estiver ok, ou o motivo se não estiver.
+     */
+    fun boardProblem(labels: IntArray): String? {
+        val counts = IntArray((labels.maxOrNull() ?: 0) + 1)
+        for (l in labels) counts[l]++
+        val types = counts.size
+        val singles = counts.count { it <= 1 }
+        val biggest = counts.maxOrNull() ?: 0
+        val solid = counts.count { it >= 4 }
+        return when {
+            types < 3 -> "poucos tipos ($types)"
+            types > 10 -> "tipos demais ($types)"
+            singles > 3 -> "muitas peças soltas"
+            biggest > labels.size * 0.55f -> "área lisa grande (janela/menu?)"
+            solid < 3 -> "tipos pouco repetidos"
+            else -> null
+        }
+    }
 }

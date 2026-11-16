@@ -54,7 +54,15 @@ class BotService : AccessibilityService() {
         showPanel()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    /** App que está na frente agora (atualizado pelos eventos de acessibilidade). */
+    @Volatile private var foregroundPkg: String? = null
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName) return  // o nosso próprio painel não conta
+        foregroundPkg = pkg
+    }
 
     override fun onInterrupt() { stopBot() }
 
@@ -249,54 +257,91 @@ class BotService : AccessibilityService() {
         val reader = BoardReader()
         val total = g.n * g.n
 
+        // O jogo é o app que estava na frente quando você tocou em Iniciar.
+        val gamePkg = foregroundPkg
+
         var prev: Array<FloatArray>? = null
         var lastMove: Move? = null
         var beforeMove: Array<FloatArray>? = null
         val failed = HashSet<Long>()
         val cellFails = IntArray(total)
         var moves = 0
+        var failStreak = 0
+        var baseline = -1f                       // brilho do tabuleiro no começo da batalha
+        var badSince = 0L                        // desde quando a tela não parece batalha
         var unstable = 0
 
+        // Marca a tela como "não é batalha". Não joga; se durar demais, para de vez.
+        fun bad(reason: String): Boolean {
+            val now = System.currentTimeMillis()
+            if (badSince == 0L) badSince = now
+            if (now - badSince > 4000) {
+                autoStop("⏹ Parado: saiu da batalha ($reason)")
+                return true
+            }
+            status("⏸ Aguardando… $reason")
+            return false
+        }
+
         while (running) {
+            // 0) o jogo ainda está na frente?
+            val fg = foregroundPkg
+            if (gamePkg != null && fg != null && fg != gamePkg) {
+                autoStop("⏹ Parado: você saiu do jogo"); return
+            }
+
             val bmp = screenshot()
             if (bmp == null) { Thread.sleep(120); continue }
             val feats = reader.features(bmp, g)
             bmp.recycle()
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
 
-            // 1) esperar as peças pararem de cair
+            // 1) esperar as peças pararem de cair (se a tela nunca para, não joga)
             val p0 = prev
             prev = feats
-            if (prefs.waitStable && unstable < 6 && (p0 == null || reader.changedCells(p0, feats) > 1)) {
-                unstable++; continue
+            if (prefs.waitStable && (p0 == null || reader.changedCells(p0, feats) > 1)) {
+                unstable++
+                if ((badSince != 0L || unstable >= 8) && bad("tela não para de mexer")) return
+                continue
             }
             unstable = 0
 
-            // 2) a última jogada funcionou? (se o tabuleiro não mudou, era pedra/bloco: não tentar de novo)
+            // 2) parece mesmo o tabuleiro?
+            val labels = reader.cluster(feats, prefs.threshold.toFloat())
+            val problem = reader.boardProblem(labels)
+            if (problem != null) { if (bad(problem)) return; Thread.sleep(150); continue }
+
+            val light = reader.brightness(feats)
+            if (baseline < 0) baseline = light
+            if (light < baseline * 0.8f || light > baseline * 1.25f) {
+                if (bad("tela escureceu/mudou")) return
+                Thread.sleep(150); continue
+            }
+            badSince = 0L
+            baseline = baseline * 0.95f + light * 0.05f   // acompanha variações pequenas
+
+            // 3) a última jogada funcionou? (se o tabuleiro não mudou, era pedra/bloco: não tentar de novo)
             val lm = lastMove
             val bm = beforeMove
             if (lm != null && bm != null) {
                 if (reader.changedCells(bm, feats) < 3) {
                     failed.add(lm.key)
                     cellFails[lm.from]++; cellFails[lm.to]++
+                    failStreak++
+                    if (failStreak >= 5) { autoStop("⏹ Parado: as jogadas não estão funcionando"); return }
                 } else {
-                    failed.clear(); cellFails.fill(0)
+                    failed.clear(); cellFails.fill(0); failStreak = 0
                 }
                 lastMove = null; beforeMove = null
             }
 
-            // 3) reconhecer os tipos e escolher a jogada
-            val labels = reader.cluster(feats, prefs.threshold.toFloat())
+            // 4) escolher e fazer a jogada
             val types = (labels.maxOrNull() ?: 0) + 1
-            if (types < 3 || types > 14) {
-                status("Não parece o tabuleiro ($types tipos)")
-                Thread.sleep(500); continue
-            }
             val blocked = BooleanArray(total) { cellFails[it] >= 2 }
             val mv = Solver.best(labels, g.n, failed, blocked)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
-                if (failed.isNotEmpty() && failed.size > 40) { failed.clear(); cellFails.fill(0) }
+                if (failed.size > 40) { failed.clear(); cellFails.fill(0) }
                 Thread.sleep(300); continue
             }
 
@@ -306,6 +351,16 @@ class BotService : AccessibilityService() {
             lastMove = mv
             drag(g.center(mv.from), g.center(mv.to), prefs)
             Thread.sleep(prefs.afterMoveMs.toLong())
+        }
+    }
+
+    /** Para o bot por conta própria e deixa o motivo no painel. */
+    private fun autoStop(msg: String) {
+        running = false
+        main.post {
+            worker = null
+            startBtn?.text = "▶ Iniciar"
+            statusText?.text = msg
         }
     }
 
