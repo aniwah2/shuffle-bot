@@ -496,8 +496,10 @@ class BotService : AccessibilityService() {
             val knownSpecies = (0 until total).filter { knownFree[it] }.map { view.species[it] }.toHashSet()
             val knownFreeCount = knownFree.count { it }
             val recognized = (0 until total).count { knownFree[it] || (view.frozen[it] && (view.species[it] in knownSpecies || border?.get(it) == true)) }
-            val needed = maxOf(8, (total - view.blocks) * 2 / 5)
-            if (recognized < needed || knownFreeCount < 4 || view.empty > 9) {
+            // fora da batalha (captura, Great Ball, Joias, Game Over) nunca passou de 2 casas reconhecidas;
+            // na batalha, efeitos cobrem parte do tabuleiro — 30% já basta para seguir jogando
+            val needed = maxOf(7, (total - view.blocks) * 3 / 10)
+            if (recognized < needed || knownFreeCount < 3 || view.empty > 9) {
                 // Parte do tabuleiro ainda é conhecida e o resto forma Pokémon consistentes (o Mega evoluiu e
                 // mudou de ícone, ou entrou Pokémon novo): se isso se repetir em 2 prints seguidos, aprende.
                 val partial = recognized >= maxOf(6, (total - view.blocks) * 3 / 10)
