@@ -134,7 +134,7 @@ class BotService : AccessibilityService() {
             }
         }
         val handle = TextView(this).apply {
-            text = "⠿ Shuffle Bot"
+            text = "⠿ Shuffle Bot · ${appVersion()}"
             setTextColor(Color.WHITE); textSize = 13f
         }
         val status = TextView(this).apply {
@@ -189,6 +189,9 @@ class BotService : AccessibilityService() {
     // ---------------------------------------------------------------- calibração
 
     private fun screenBounds() = wm.currentWindowMetrics.bounds
+
+    private fun appVersion(): String =
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "?"
 
     /** Grade salva (se você calibrou) ou a estimativa automática pelo tamanho da tela. */
     private fun geomOrGuess(prefs: Prefs): BoardGeom {

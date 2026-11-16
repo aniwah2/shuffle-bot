@@ -11,8 +11,10 @@ android {
         applicationId = "com.alan.shufflebot"
         minSdk = 30          // Android 11+ (necessário para tirar print pelo serviço de acessibilidade)
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // número do build do GitHub (o mesmo do link de download: build-N)
+        val run = (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toInt()
+        versionCode = maxOf(1, run)
+        versionName = "build-$run"
     }
 
     signingConfigs {

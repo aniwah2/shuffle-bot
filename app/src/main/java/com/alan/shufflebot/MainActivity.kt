@@ -32,7 +32,9 @@ class MainActivity : Activity() {
             text = t; textSize = size; setTextColor(color); setPadding(0, dp(6), 0, dp(6))
         }
 
+        val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "?"
         col.addView(text("Shuffle Bot", 24f, Color.BLACK))
+        col.addView(text("Versão: $ver", 14f, Color.GRAY))
         serviceState = text("", 15f)
         col.addView(serviceState)
 
