@@ -240,6 +240,7 @@ class BotService : AccessibilityService() {
             val top = if (prefs.manualGrid && prefs.frameY >= 0) prefs.frameY else cur.top
 
             val v = GridFrameView(this)
+            v.ghost = loadGhost()
             val p = overlayParams(size, size).apply { x = left; y = top }
             clampFrame(p)
             v.onDrag = { dx, dy -> p.x += dx; p.y += dy; refreshFrame(v, p) }
@@ -395,6 +396,8 @@ class BotService : AccessibilityService() {
         var emptyMovesOff = false        // se soltar em casa vazia não funcionar no jogo, desliga
         var cloudOff = false; var cloudFails = 0; var cloudOk = 0   // idem para tentar embaixo de nuvem
         var megaCount = 0                // ícones do Mega já combinados (estimativa)
+        var lastGhost = 0L               // última foto de referência do tabuleiro
+        var wantGhost = false
         var lastMegaCells = 0
 
         // ---- Shuffle Dex: quem é cada Pokémon do time e quem é o inimigo
@@ -487,6 +490,7 @@ class BotService : AccessibilityService() {
                     readOpponent(crop) { e -> if (e != null) opponentRef.set(e) }
                 }
             }
+            if (wantGhost) { saveGhost(bmp, g); wantGhost = false }
             bmp.recycle()
             val feats = f0
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
@@ -588,6 +592,8 @@ class BotService : AccessibilityService() {
             }
             lostSince = 0L
             endWordRef.set(null)
+            // tabuleiro bem reconhecido: guarda uma foto de referência para a calibração (a cada 20 s)
+            if (recognized >= needed + 6 && now - lastGhost > 20_000) { lastGhost = now; wantGhost = true }
             // Pokémon novos que apareçam no meio da batalha (disruptions) entram na lista
             if (known.size < 12) for (l in freeLooks(view, feats, 3)) if (!isKnown(l)) {
                 known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
@@ -863,6 +869,24 @@ class BotService : AccessibilityService() {
     }
 
     // ---------------------------------------------------------------- print da tela
+
+    private fun ghostFile() = java.io.File(filesDir, "tabuleiro_referencia.png")
+
+    /** Guarda uma foto do tabuleiro (recortado pela grade) para usar como referência na calibração. */
+    private fun saveGhost(bmp: Bitmap, g: BoardGeom) {
+        runCatching {
+            if (g.left < 0 || g.top < 0 || g.left + g.size > bmp.width || g.top + g.size > bmp.height) return
+            val crop = Bitmap.createBitmap(bmp, g.left, g.top, g.size, g.size)
+            val small = Bitmap.createScaledBitmap(crop, 480, 480, true)
+            crop.recycle()
+            ghostFile().outputStream().use { small.compress(Bitmap.CompressFormat.PNG, 90, it) }
+            small.recycle()
+        }
+    }
+
+    private fun loadGhost(): Bitmap? = runCatching {
+        val f = ghostFile(); if (f.exists()) android.graphics.BitmapFactory.decodeFile(f.path) else null
+    }.getOrNull()
 
     /** Quão bem essa grade lê um tabuleiro: Pokémon reconhecidos (com Dex) ou tabuleiro sem problema. */
     private fun boardScore(reader: BoardReader, bmp: Bitmap, g: BoardGeom, thr: Float, useDex: Boolean): Int {

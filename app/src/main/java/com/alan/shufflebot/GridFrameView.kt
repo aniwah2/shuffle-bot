@@ -1,7 +1,9 @@
 package com.alan.shufflebot
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.RectF
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
@@ -17,6 +19,17 @@ class GridFrameView(ctx: Context) : View(ctx) {
 
     var onDrag: ((Int, Int) -> Unit)? = null
     var onResize: ((Int) -> Unit)? = null
+
+    /** Foto do tabuleiro de uma batalha anterior, desenhada semitransparente como referência. */
+    var ghost: Bitmap? = null
+        set(v) { field = v; invalidate() }
+
+    private val ghostPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 120 }
+    private val slot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(70, 120, 100, 80) }
+    private val slotEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(160, 255, 255, 255); style = Paint.Style.STROKE
+    }
+    private val readArea = Paint().apply { color = Color.argb(150, 255, 230, 0); style = Paint.Style.STROKE }
 
     var warning: Boolean = false
         set(v) { if (field != v) { field = v; invalidate() } }
@@ -59,6 +72,25 @@ class GridFrameView(ctx: Context) : View(ctx) {
         lines.color = Color.argb(200, Color.red(c), Color.green(c), Color.blue(c))
 
         canvas.drawRect(0f, 0f, w, h, fill)
+        val cw = w / 6; val ch = h / 6
+        val g = ghost
+        if (g != null) {
+            // referência: o tabuleiro como estava numa batalha — encaixe os Pokémon da foto nos de verdade
+            canvas.drawBitmap(g, null, RectF(0f, 0f, w, h), ghostPaint)
+        } else {
+            // sem foto ainda: desenha os espaços das casas como no jogo
+            slotEdge.strokeWidth = 1.5f * d
+            for (r in 0 until 6) for (c in 0 until 6) {
+                val rect = RectF(c * cw + cw * 0.05f, r * ch + ch * 0.05f, (c + 1) * cw - cw * 0.05f, (r + 1) * ch - ch * 0.05f)
+                canvas.drawRoundRect(rect, cw * 0.15f, cw * 0.15f, slot)
+                canvas.drawRoundRect(rect, cw * 0.15f, cw * 0.15f, slotEdge)
+            }
+        }
+        // área que o bot realmente lê em cada casa (o miolo): o Pokémon tem que ficar dentro dela
+        readArea.strokeWidth = 1f * d
+        for (r in 0 until 6) for (c in 0 until 6) {
+            canvas.drawRect(c * cw + cw * 0.18f, r * ch + ch * 0.18f, (c + 1) * cw - cw * 0.18f, (r + 1) * ch - ch * 0.18f, readArea)
+        }
         for (k in 1 until 6) {
             canvas.drawLine(w * k / 6, 0f, w * k / 6, h, lines)
             canvas.drawLine(0f, h * k / 6, w, h * k / 6, lines)
