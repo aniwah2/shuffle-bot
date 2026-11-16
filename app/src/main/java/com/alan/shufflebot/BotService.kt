@@ -332,12 +332,12 @@ class BotService : AccessibilityService() {
 
             val light = reader.brightness(feats)
             if (baseline < 0) baseline = light
-            if (light < baseline * 0.8f || light > baseline * 1.25f) {
+            if (light < baseline * 0.7f || light > baseline * 1.4f) {
                 if (bad("tela escureceu/mudou")) return
                 Thread.sleep(150); continue
             }
             badSince = 0L
-            baseline = baseline * 0.95f + light * 0.05f   // acompanha variações pequenas
+            baseline = baseline * 0.85f + light * 0.15f   // acompanha variações pequenas
 
             // 3) a última jogada funcionou? (se o tabuleiro não mudou, era pedra/bloco: não tentar de novo)
             val lm = lastMove
