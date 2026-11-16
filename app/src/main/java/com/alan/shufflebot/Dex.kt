@@ -34,9 +34,16 @@ object Dex {
 
     fun load(ctx: Context) {
         if (ready) return
+        val txt = ctx.assets.open("dex.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val spr = ctx.assets.open("sprites.bin").use { it.readBytes() }
+        loadFrom(txt, spr)
+    }
+
+    fun loadFrom(jsonText: String, spriteBytes: ByteArray) {
+        if (ready) return
         synchronized(this) {
             if (ready) return
-            val json = JSONObject(ctx.assets.open("dex.json").bufferedReader(Charsets.UTF_8).use { it.readText() })
+            val json = JSONObject(jsonText)
             dim = json.getInt("dim")
             val arr = json.getJSONArray("e")
             val list = ArrayList<DexEntry>(arr.length())
@@ -52,7 +59,7 @@ object Dex {
                 byName.putIfAbsent(norm(e.name), e)
             }
             entries = list
-            feats = ctx.assets.open("sprites.bin").use { it.readBytes() }
+            feats = spriteBytes
             val types = json.getJSONObject("types")
             for (t in types.keys()) {
                 val o = types.getJSONObject(t)

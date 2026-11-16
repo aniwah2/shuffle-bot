@@ -46,4 +46,5 @@ dependencies {
     // leitura do nome do inimigo na tela (roda no próprio celular, sem internet)
     implementation("com.google.mlkit:text-recognition:16.0.1")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")   // JSONObject de verdade nos testes
 }

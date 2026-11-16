@@ -84,6 +84,19 @@ class FramesTest {
         println("v5 aprendidos: ${learner.known.size}")
     }
 
+    @Test fun dex_caixoteNaoEPokemon() {
+        val dexJson = File("src/main/assets/dex.json").readText()
+        val spr = File("src/main/assets/sprites.bin").readBytes()
+        Dex.loadFrom(dexJson, spr)
+        val img = load("v6_003.png")
+        val r = BoardReader()
+        val g = BoardGeom.guess(img.width, img.height)
+        val feats = r.features(img, g)!!
+        val v = r.analyze(feats, 15f, r.frozenByBorder(img, g))
+        val counts = v.species.filter { it >= 0 }.groupingBy { it }.eachCount()
+        for ((sp, look) in r.speciesLook(v, feats)) println("[dex] espécie $sp (${counts[sp]} casas) -> ${Dex.identify(look)?.name ?: "NÃO É POKÉMON (disrupção)"}")
+    }
+
     @Test fun semCalibracao_estimaEAjusta() {
         val r = BoardReader()
         for (name in listOf("v5_020.png", "v4_060.png", "ex4.png", "blocos.png")) {

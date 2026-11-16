@@ -297,7 +297,7 @@ class BotService : AccessibilityService() {
         status("Lendo o tabuleiro…")
         Thread {
             Thread.sleep(400)  // dá tempo do jogo redesenhar
-            val shot = screenshot() ?: run { status("Não consegui ler a tela"); return@Thread }
+            val shot = screenshotRetry() ?: run { status("Não consegui ler a tela"); return@Thread }
             val reader = BoardReader()
             val feats = reader.features(shot, g)
             shot.recycle()
@@ -356,7 +356,7 @@ class BotService : AccessibilityService() {
      * e a grade nova reconhecer melhor que a atual. Em menus/animações não muda nada.
      */
     private fun autoFit(prefs: Prefs, g0: BoardGeom, reader: BoardReader, wide: Boolean = false): BoardGeom {
-        val shot = screenshot() ?: return g0
+        val shot = screenshotRetry() ?: return g0
         try {
             val thr = prefs.threshold.toFloat()
             val f0 = reader.features(shot, g0)
@@ -544,7 +544,7 @@ class BotService : AccessibilityService() {
                 endWordRef.get()?.let { w -> autoStop("✅ Batalha terminou (li \"$w\"). Toque ▶ na próxima"); return }
                 if (moves > 0 && now - lostSince > 1500 && now - lastEndOcr > 1500) {
                     lastEndOcr = now
-                    screenshot()?.let { shot ->
+                    screenshotRetry(2)?.let { shot ->
                         val small = runCatching { Bitmap.createScaledBitmap(shot, shot.width / 2, shot.height / 2, true) }.getOrNull()
                         shot.recycle()
                         if (small != null) readEndWord(small) { w -> if (w != null) endWordRef.set(w) }
@@ -585,7 +585,16 @@ class BotService : AccessibilityService() {
 
             // 5) escolher e fazer a jogada
             val types = view.types
-            val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) }
+            // Com a Dex: o que não bate com nenhum Pokémon (caixote/pedra, moeda…) é disrupção e não se arrasta.
+            // Só vale se a Dex reconheceu pelo menos 2 Pokémon (sinal de que está funcionando neste celular).
+            val dexWorks = useDex && knownEntry.count { it != null } >= 2
+            fun isDisruption(f: FloatArray): Boolean {
+                if (!dexWorks) return false
+                var bi = -1; var bd = Float.MAX_VALUE
+                for (k in known.indices) { val d = reader.dist(known[k], f); if (d < bd) { bd = d; bi = k } }
+                return bi >= 0 && bd < knownThr && knownEntry.getOrNull(bi) == null
+            }
+            val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) }
             val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
             var value: SpeciesValue? = null
             var dexTxt = ""
@@ -777,6 +786,15 @@ class BotService : AccessibilityService() {
     }
 
     // ---------------------------------------------------------------- print da tela
+
+    /** Print com novas tentativas: o Android só permite ~3 prints por segundo. */
+    private fun screenshotRetry(tries: Int = 4): Bitmap? {
+        repeat(tries) {
+            screenshot()?.let { return it }
+            Thread.sleep(350)
+        }
+        return null
+    }
 
     private fun screenshot(): Bitmap? {
         val latch = CountDownLatch(1)
