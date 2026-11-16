@@ -432,6 +432,7 @@ class BotService : AccessibilityService() {
 
         var prev: Array<FloatArray>? = null
         var lastMove: Move? = null
+        var moveDoneAt = 0L              // quando o último arrasto terminou
         var beforeMove: Array<FloatArray>? = null
         val failed = HashSet<Long>()
         val cellFails = IntArray(total)
@@ -602,7 +603,9 @@ class BotService : AccessibilityService() {
                 known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
             }
 
-            // 4) a última jogada funcionou? (se o tabuleiro não mudou, era pedra/bloco: não tentar de novo)
+            // 4) a última jogada funcionou? Só julga depois que o jogo teve tempo de processar a troca
+            //    (julgar cedo demais fazia o bot achar que jogadas boas falharam).
+            if (lastMove != null && now - moveDoneAt < 550) { Thread.sleep(40); continue }
             val lm = lastMove
             val bm = beforeMove
             if (lm != null && bm != null) {
@@ -641,7 +644,7 @@ class BotService : AccessibilityService() {
             }
             // Só mexe em casas onde reconhece um Pokémon desta batalha. Nuvem, caixote, bloco, o botão do gravador
             // de tela ou qualquer outra coisa por cima ficam de fora (nem arrasta, nem conta como combinação).
-            val blocked = BooleanArray(total) { !knownFree[it] || !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
+            val blocked = BooleanArray(total) { !knownFree[it] || !view.movable[it] || cellFails[it] >= 1 || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
             // Que disrupção é cada casa (pela aparência do jogo): rocha, bloco, nuvem, metal; gelo = moldura clara
             val dkind = IntArray(total)
             val dCount = HashMap<String, Int>()
@@ -718,6 +721,7 @@ class BotService : AccessibilityService() {
             beforeMove = feats
             lastMove = mv
             drag(g.center(mv.from), g.center(mv.to), prefs)
+            moveDoneAt = System.currentTimeMillis()
             if (prefs.afterMoveMs > 0) Thread.sleep(prefs.afterMoveMs.toLong())
         }
     }
