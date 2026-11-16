@@ -84,6 +84,30 @@ class FramesTest {
         println("v5 aprendidos: ${learner.known.size}")
     }
 
+    private fun dexLearn(name: String, times: Int = 2): String {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val img = load(name)
+        val r = BoardReader()
+        val g = BoardGeom.guess(img.width, img.height)
+        val l = BattleLearner(r)
+        var learned = 0
+        repeat(times) {
+            val f = r.features(img, g) ?: return "fora"
+            val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            learned += l.tryLearnDex(v, f).size
+        }
+        return if (learned > 0) "BATALHA (${l.known.size} Pokémon, ${l.disrupt.size} disrupções) — ${l.lastReason}" else "não — ${l.lastReason}"
+    }
+
+    @Test fun dex_reconheceBatalhaDificilENaoMenus() {
+        println("== batalhas (devem ser reconhecidas)")
+        for (n in listOf("v71_011", "v71_012", "v72_006", "v72_007", "v73_006", "v73_007", "v73_010", "v6_003", "v5_020", "ex4", "blocos", "v4_060"))
+            println("[batalha] $n: ${dexLearn("$n.png")}")
+        println("== fora de batalha (NUNCA podem ser reconhecidas)")
+        for (n in listOf("v71_003", "v71_005", "v72_045", "v72_050", "v2_100", "v2_110", "v2_122", "v4_030"))
+            println("[fora] $n: ${dexLearn("$n.png", 3)}")
+    }
+
     @Test fun dex_caixoteNaoEPokemon() {
         val dexJson = File("src/main/assets/dex.json").readText()
         val spr = File("src/main/assets/sprites.bin").readBytes()

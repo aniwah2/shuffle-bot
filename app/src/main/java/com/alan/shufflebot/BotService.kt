@@ -460,8 +460,22 @@ class BotService : AccessibilityService() {
 
             val bmp = screenshot()
             if (bmp == null) { Thread.sleep(60); continue }
-            val feats = reader.features(bmp, g)
-            val border = if (feats != null) reader.frozenByBorder(bmp, g) else null
+            var f0 = reader.features(bmp, g)
+            var b0 = if (f0 != null) reader.frozenByBorder(bmp, g) else null
+            // Esperando a batalha: compara a grade atual com a estimativa automática no MESMO print e fica com a melhor
+            if (known.isEmpty()) {
+                val gg = BoardGeom.guess(bmp.width, bmp.height)
+                if (gg != g) {
+                    val sCur = boardScore(reader, bmp, g, thr, useDex)
+                    val sGuess = boardScore(reader, bmp, gg, thr, useDex)
+                    if (sGuess > sCur) {
+                        g = gg; prefs.boardLeft = gg.left; prefs.boardTop = gg.top; prefs.boardSize = gg.size
+                        prefs.frameX = -1; prefs.frameY = -1
+                        f0 = reader.features(bmp, g); b0 = f0?.let { reader.frozenByBorder(bmp, g) }
+                        prev = null
+                    }
+                }
+            }
             if (useDex && known.isNotEmpty() && opponentRef.get() == null && ocrTries < 5 &&
                 System.currentTimeMillis() - lastOcr > 3000) {
                 lastOcr = System.currentTimeMillis(); ocrTries++
@@ -474,7 +488,9 @@ class BotService : AccessibilityService() {
                 }
             }
             bmp.recycle()
+            val feats = f0
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
+            val border = b0
             val now = System.currentTimeMillis()
 
             // 1) (opcional) esperar as peças assentarem — no máximo 1 print a mais
@@ -490,13 +506,13 @@ class BotService : AccessibilityService() {
 
             // 2) ainda não sabe quais Pokémon são desta batalha: aprende com um tabuleiro claro e parado
             if (known.isEmpty()) {
-                val learned = learner.tryLearn(view, feats)
+                val learned = if (useDex) learner.tryLearnDex(view, feats) else learner.tryLearn(view, feats)
                 for (l in learned) knownEntry.add(if (useDex) Dex.identify(l) else null)
                 if (known.isEmpty()) {
                     if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }
                     // parece tabuleiro mas não dá pra ler direito: a grade pode estar imprecisa → ajusta (só aceita se melhorar)
                     val p = reader.boardProblem(view)
-                    if (p != null && !p.startsWith("quase tudo liso") && now - lastFitTry > 8000) {
+                    if (p != null && !p.startsWith("quase tudo liso") && now - lastFitTry > 3000) {
                         if (boardishSince == 0L) boardishSince = now
                         if (now - boardishSince > 1500) {
                             lastFitTry = now
@@ -518,7 +534,9 @@ class BotService : AccessibilityService() {
             val recognized = (0 until total).count { knownFree[it] || (view.frozen[it] && (view.species[it] in knownSpecies || border?.get(it) == true)) }
             // fora da batalha (captura, Great Ball, Joias, Game Over) nunca passou de 2 casas reconhecidas;
             // na batalha, efeitos cobrem parte do tabuleiro — 30% já basta para seguir jogando
-            val needed = maxOf(7, (total - view.blocks) * 3 / 10)
+            // disrupções conhecidas (caixote, bloco de metal...) não contam contra
+            val disruptCells = (0 until total).count { view.species[it] >= 0 && !knownFree[it] && learner.isDisrupt(feats[it]) }
+            val needed = maxOf(6, (total - view.blocks - disruptCells) * 3 / 10)
             if (recognized < needed || knownFreeCount < 3 || view.empty > 9) {
                 // Parte do tabuleiro ainda é conhecida e o resto forma Pokémon consistentes (o Mega evoluiu e
                 // mudou de ícone, ou entrou Pokémon novo): se isso se repetir em 2 prints seguidos, aprende.
@@ -594,7 +612,7 @@ class BotService : AccessibilityService() {
                 for (k in known.indices) { val d = reader.dist(known[k], f); if (d < bd) { bd = d; bi = k } }
                 return bi >= 0 && bd < knownThr && knownEntry.getOrNull(bi) == null
             }
-            val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) }
+            val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
             val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
             var value: SpeciesValue? = null
             var dexTxt = ""
@@ -786,6 +804,17 @@ class BotService : AccessibilityService() {
     }
 
     // ---------------------------------------------------------------- print da tela
+
+    /** Quão bem essa grade lê um tabuleiro: Pokémon reconhecidos (com Dex) ou tabuleiro sem problema. */
+    private fun boardScore(reader: BoardReader, bmp: Bitmap, g: BoardGeom, thr: Float, useDex: Boolean): Int {
+        val f = reader.features(bmp, g) ?: return -1
+        val v = reader.analyze(f, thr, reader.frozenByBorder(bmp, g))
+        if (useDex) {
+            val cnt = v.species.filter { it >= 0 }.groupingBy { it }.eachCount()
+            return reader.speciesLook(v, f).count { (sp, look) -> (cnt[sp] ?: 0) >= 3 && Dex.identify(look) != null }
+        }
+        return if (reader.boardProblem(v) == null) 1 else 0
+    }
 
     /** Print com novas tentativas: o Android só permite ~3 prints por segundo. */
     private fun screenshotRetry(tries: Int = 4): Bitmap? {

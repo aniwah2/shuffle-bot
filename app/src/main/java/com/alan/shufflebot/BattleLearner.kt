@@ -10,6 +10,43 @@ class BattleLearner(private val reader: BoardReader, val knownThr: Float = 20f) 
     private var streak = 0
     /** Último motivo de não ter aprendido (para diagnóstico). */
     var lastReason = ""
+    /** Aparências que NÃO são Pokémon (caixote, bloco de metal, pedra...) vistas no começo da batalha. */
+    val disrupt = ArrayList<FloatArray>()
+    private var prevNames: Set<String>? = null
+    private var dexStreak = 0
+
+    fun isDisrupt(f: FloatArray) = !isKnown(f) && disrupt.any { reader.dist(it, f) < knownThr }
+
+    /**
+     * Com a Shuffle Dex: é batalha quando há pelo menos 2 espécies de Pokémon DE VERDADE (reconhecidas pela Dex)
+     * com 3+ casas cada, iguais em 2 prints seguidos. Funciona mesmo com o tabuleiro cheio de disrupção.
+     * Em menus e telas de captura cada Pokémon aparece no máximo em 1 casa, então não passa.
+     */
+    fun tryLearnDex(view: BoardView, feats: Array<FloatArray>): List<FloatArray> {
+        val cnt = HashMap<Int, Int>()
+        for (i in view.species.indices) if ((view.movable[i] || view.frozen[i]) && view.species[i] >= 0)
+            cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
+        val looks = reader.speciesLook(view, feats)
+        val poke = ArrayList<FloatArray>(); val names = HashSet<String>(); val other = ArrayList<FloatArray>()
+        var strong = 0
+        for ((sp, look) in looks) {
+            val c = cnt[sp] ?: 0
+            if (c < 2) continue
+            val e = Dex.identify(look)
+            if (e != null) { poke.add(look); names.add(e.baseName); if (c >= 3) strong++ }
+            else if (c >= 3) other.add(look)
+        }
+        if (strong < 2 || view.empty > 6) {
+            lastReason = "Pokémon reconhecidos: $strong de 2"
+            prevNames = null; dexStreak = 0; return emptyList()
+        }
+        dexStreak = if (prevNames == names) dexStreak + 1 else 0
+        prevNames = names
+        lastReason = "vi ${names.joinToString()} (confirmando)"
+        if (dexStreak < 1) return emptyList()
+        known.addAll(poke); disrupt.addAll(other)
+        return poke
+    }
 
     fun isKnown(f: FloatArray) = known.any { reader.dist(it, f) < knownThr }
 
