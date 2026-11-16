@@ -108,6 +108,27 @@ class FramesTest {
             println("[fora] $n: ${dexLearn("$n.png", 3)}")
     }
 
+    @Test fun nuvens_soMexeEmPokemonReconhecido() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val r = BoardReader()
+        val l = BattleLearner(r)
+        for (n in listOf("v8_start", "v8_start2", "v8_start", "v8_start2")) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; l.tryLearnDex(r.analyze(f, 15f, r.frozenByBorder(img, g)), f)
+        }
+        println("[nuvem] aprendeu ${l.known.size} Pokémon / ${l.disrupt.size} disrupções: ${l.lastReason}")
+        val img = load("v8_nuvem.png"); val g = BoardGeom.guess(img.width, img.height)
+        val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+        val knownFree = BooleanArray(36) { v.movable[it] && l.isKnown(f[it]) }
+        val sb = StringBuilder()
+        for (row in 0 until 6) { sb.append("    "); for (c in 0 until 6) { val i = row * 6 + c
+            sb.append(if (knownFree[i]) String.format("%3d", v.species[i]) else "  .") }; sb.append('\n') }
+        print("[nuvem] casas que o bot pode mexer (. = nuvem/caixote/desconhecido):\n$sb")
+        val sp = IntArray(36) { if (knownFree[it]) v.species[it] else -(it + 1) }
+        val mv = Solver.best(sp, 6, emptySet(), BooleanArray(36) { !knownFree[it] })
+        println("[nuvem] jogada escolhida: $mv")
+    }
+
     @Test fun dex_caixoteNaoEPokemon() {
         val dexJson = File("src/main/assets/dex.json").readText()
         val spr = File("src/main/assets/sprites.bin").readBytes()
