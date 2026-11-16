@@ -16,6 +16,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Testes com quadros reais
+        run: gradle testDebugUnitTest
+        continue-on-error: true
       - run: gradle assembleDebug
       - run: cp app/build/outputs/apk/debug/app-debug.apk ShuffleBot.apk
       - uses: actions/upload-artifact@v4

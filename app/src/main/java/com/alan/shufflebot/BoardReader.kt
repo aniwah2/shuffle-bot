@@ -4,6 +4,28 @@ import android.graphics.Bitmap
 import android.graphics.PointF
 import kotlin.math.abs
 
+/** Imagem da tela (no app vem de um Bitmap; nos testes, de um arquivo). */
+interface Img {
+    val width: Int
+    val height: Int
+    fun pixel(x: Int, y: Int): Int
+    fun region(out: IntArray, x: Int, y: Int, w: Int, h: Int)
+}
+
+class BitmapImg(private val b: Bitmap) : Img {
+    override val width get() = b.width
+    override val height get() = b.height
+    override fun pixel(x: Int, y: Int) = b.getPixel(x, y)
+    override fun region(out: IntArray, x: Int, y: Int, w: Int, h: Int) = b.getPixels(out, 0, w, x, y, w, h)
+}
+
+class ArrayImg(override val width: Int, override val height: Int, val px: IntArray) : Img {
+    override fun pixel(x: Int, y: Int) = px[y * width + x]
+    override fun region(out: IntArray, x: Int, y: Int, w: Int, h: Int) {
+        for (r in 0 until h) System.arraycopy(px, (y + r) * width + x, out, r * w, w)
+    }
+}
+
 /** Posição do tabuleiro na tela (em pixels). O tabuleiro é quadrado, N x N casas. */
 data class BoardGeom(val left: Int, val top: Int, val size: Int, val n: Int = 6) {
     val cell: Float get() = size.toFloat() / n
@@ -35,7 +57,9 @@ class BoardView(
 
 class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f) {
 
-    fun features(bmp: Bitmap, g: BoardGeom): Array<FloatArray>? {
+    fun features(bmp: Bitmap, g: BoardGeom): Array<FloatArray>? = features(BitmapImg(bmp), g)
+
+    fun features(bmp: Img, g: BoardGeom): Array<FloatArray>? {
         if (g.size <= 0 || g.left < 0 || g.top < 0 ||
             g.left + g.size > bmp.width || g.top + g.size > bmp.height
         ) return null
@@ -49,7 +73,7 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
             val c = i % g.n
             val x0 = (g.left + c * cs + cs * inset).toInt().coerceIn(0, bmp.width - w)
             val y0 = (g.top + r * cs + cs * inset).toInt().coerceIn(0, bmp.height - w)
-            bmp.getPixels(px, 0, w, x0, y0, w, w)
+            bmp.region(px, x0, y0, w, w)
 
             val f = FloatArray(blocks * blocks * 3)
             val cnt = IntArray(blocks * blocks)
@@ -76,7 +100,9 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
      * Gelo/barreira: a casa congelada tem uma moldura clara e sem cor em volta do ícone
      * (casas normais mostram o fundo marrom do tabuleiro). Mede a faixa da borda, sem os cantos.
      */
-    fun frozenByBorder(bmp: Bitmap, g: BoardGeom): BooleanArray {
+    fun frozenByBorder(bmp: Bitmap, g: BoardGeom): BooleanArray = frozenByBorder(BitmapImg(bmp), g)
+
+    fun frozenByBorder(bmp: Img, g: BoardGeom): BooleanArray {
         val cs = g.cell
         val res = BooleanArray(g.n * g.n)
         for (i in res.indices) {
@@ -87,7 +113,7 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
             val a = (n * 0.03f).toInt(); val b = (n * 0.12f).toInt().coerceAtLeast(a + 1)
             var bright = 0; var tot = 0
             fun px(x: Int, y: Int) {
-                val c = bmp.getPixel(x0 + x, y0 + y)
+                val c = bmp.pixel(x0 + x, y0 + y)
                 val r = (c shr 16) and 0xFF; val gg = (c shr 8) and 0xFF; val bb = c and 0xFF
                 val lum = (r + gg + bb) / 3
                 val sat = maxOf(r, gg, bb) - minOf(r, gg, bb)
@@ -332,10 +358,15 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
      * (menos tipos diferentes e peças iguais bem parecidas). Corrige calibração imprecisa.
      */
     fun fitGrid(bmp: Bitmap, g: BoardGeom, thr: Float): BoardGeom {
-        val W = bmp.width
-        val H = bmp.height
-        val px = IntArray(W * H)
-        bmp.getPixels(px, 0, W, 0, 0, W, H)
+        val px = IntArray(bmp.width * bmp.height)
+        bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+        return fitGrid(ArrayImg(bmp.width, bmp.height, px), g, thr)
+    }
+
+    fun fitGrid(img: ArrayImg, g: BoardGeom, thr: Float): BoardGeom {
+        val W = img.width
+        val H = img.height
+        val px = img.px
 
         fun score(l: Float, t: Float, sz: Float, stride: Int): Float {
             if (l < 0 || t < 0 || l + sz > W || t + sz > H) return Float.MAX_VALUE

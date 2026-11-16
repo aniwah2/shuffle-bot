@@ -399,11 +399,10 @@ class BotService : AccessibilityService() {
 
         // ---- Pokémon DESTA batalha. Só joga se a maior parte das casas forem eles.
         // (Chão do cenário, Pokébola, janela da Great Ball etc. não batem com nenhum e o bot não toca.)
-        val known = ArrayList<FloatArray>()
-        val knownThr = 20f
-        fun isKnown(f: FloatArray) = known.any { reader.dist(it, f) < knownThr }
-        var candidate: List<FloatArray>? = null
-        var candidateStreak = 0
+        val learner = BattleLearner(reader)
+        val known = learner.known
+        val knownThr = learner.knownThr
+        fun isKnown(f: FloatArray) = learner.isKnown(f)
         var adopt: List<FloatArray>? = null      // Pokémon novos no meio da batalha (ex.: Mega evoluiu)
         var adoptStreak = 0
         val waitingSince = System.currentTimeMillis()
@@ -428,14 +427,7 @@ class BotService : AccessibilityService() {
         }
         fun unmovable(f: FloatArray) = sigs.any { it.ok == 0 && it.fails >= 2 && reader.dist(it.f, f) < sigThr }
 
-        /** Aparência média das espécies livres com pelo menos [minCells] casas. */
-        fun freeLooks(view: BoardView, feats: Array<FloatArray>, minCells: Int): List<FloatArray> {
-            val cnt = HashMap<Int, Int>()
-            // conta livres + congelados da espécie (fases cheias de gelo); a aparência vem só dos livres
-            for (i in 0 until total) if ((view.movable[i] || view.frozen[i]) && view.species[i] >= 0) cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
-            val looks = reader.speciesLook(view, feats)
-            return cnt.filter { it.value >= minCells }.keys.mapNotNull { looks[it] }
-        }
+        fun freeLooks(view: BoardView, feats: Array<FloatArray>, minCells: Int) = learner.freeLooks(view, feats, minCells)
 
         while (running) {
             // 0) o jogo ainda está na frente?
@@ -482,20 +474,8 @@ class BotService : AccessibilityService() {
 
             // 2) ainda não sabe quais Pokémon são desta batalha: aprende com um tabuleiro claro e parado
             if (known.isEmpty()) {
-                val looks = if (reader.boardProblem(view) == null && view.empty <= 2) freeLooks(view, feats, 4) else emptyList()
-                if (looks.size >= 3) {
-                    val prevC = candidate
-                    val same = prevC != null && prevC.size == looks.size &&
-                        looks.all { l -> prevC.any { reader.dist(it, l) < knownThr } }
-                    candidateStreak = if (same) candidateStreak + 1 else 0
-                    candidate = looks
-                    if (candidateStreak >= 2) {
-                        known.addAll(looks)
-                        for (l in looks) knownEntry.add(if (useDex) Dex.identify(l) else null)
-                    }
-                } else {
-                    candidate = null; candidateStreak = 0
-                }
+                val learned = learner.tryLearn(view, feats)
+                for (l in learned) knownEntry.add(if (useDex) Dex.identify(l) else null)
                 if (known.isEmpty()) {
                     if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }
                     // parece tabuleiro mas não dá pra ler direito: a grade pode estar imprecisa → ajusta (só aceita se melhorar)
@@ -508,7 +488,7 @@ class BotService : AccessibilityService() {
                             continue
                         }
                     } else if (p == null || p.startsWith("quase tudo liso")) boardishSince = 0L
-                    status("⏳ Aguardando a batalha…")
+                    status("⏳ Aguardando a batalha… (${learner.lastReason})")
                     continue
                 }
             }
