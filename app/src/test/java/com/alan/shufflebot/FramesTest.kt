@@ -157,6 +157,37 @@ class FramesTest {
         }
     }
 
+    @Test fun roserade_semJogada() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val r = BoardReader(); val l = BattleLearner(r)
+        for (n in listOf("v13_023", "v13_025", "v13_023")) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v0 = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            if (l.known.isEmpty()) { if (l.tryLearnDex(v0, f).isEmpty() && l.known.isEmpty()) l.tryLearn(v0, f) }
+        }
+        val team = l.known.mapNotNull { Dex.identify(it)?.baseName }.toHashSet()
+        println("[rose] aprendeu ${l.known.size}: $team — ${l.lastReason}")
+        for (n in listOf("v13_041", "v13_055", "v13_069", "v13_079")) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            val spName = HashMap<Int, String>()
+            for ((sp, look) in r.speciesLook(v, f)) Dex.identify(look)?.let { spName[sp] = it.baseName }
+            val knownFree = BooleanArray(36) { v.movable[it] && (l.isKnown(f[it]) || spName[v.species[it]]?.let { x -> x in team } == true) }
+            val canon = HashMap<Int, Int>(); val first = HashMap<String, Int>()
+            for ((sp, nm) in spName) canon[sp] = first.getOrPut(nm) { sp }
+            val sb = StringBuilder()
+            for (row in 0 until 6) { sb.append("      "); for (c in 0 until 6) { val i = row * 6 + c
+                val s = v.species[i]; val cs = canon[s] ?: s
+                sb.append(when { s < 0 -> "  B"; v.frozen[i] -> String.format("%2d*", cs); knownFree[i] -> String.format("%3d", cs); else -> String.format("%2d?", cs) }) }; sb.append('\n') }
+            val spK = IntArray(36) { if (knownFree[it]) (canon[v.species[it]] ?: v.species[it]) else -(it + 1) }
+            val mvK = Solver.best(spK, 6, emptySet(), BooleanArray(36) { !knownFree[it] })
+            val spA = IntArray(36) { val s = v.species[it]; if (s >= 0) (canon[s] ?: s) else s }
+            val mvA = Solver.best(spA, 6, emptySet(), BooleanArray(36) { !v.movable[it] }, v.frozen)
+            println("[rose] $n: nomes=${spName.values.toSet()}  (? = Pokémon que o bot NÃO aceitou mexer)\n$sb" +
+                "[rose]   jogada só com reconhecidos: $mvK | com todos os livres: $mvA")
+        }
+    }
+
     @Test fun nuvens_soMexeEmPokemonReconhecido() {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val r = BoardReader()
