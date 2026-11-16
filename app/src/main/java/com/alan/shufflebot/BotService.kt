@@ -433,6 +433,8 @@ class BotService : AccessibilityService() {
         var prev: Array<FloatArray>? = null
         var lastMove: Move? = null
         var moveDoneAt = 0L              // quando o último arrasto terminou
+        var lastNormal: Move? = null     // última troca normal que ainda não mostrou efeito
+        var lastNormalBefore: Array<FloatArray>? = null
         var beforeMove: Array<FloatArray>? = null
         val failed = HashSet<Long>()
         val cellFails = IntArray(total)
@@ -603,30 +605,28 @@ class BotService : AccessibilityService() {
                 known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
             }
 
-            // 4) a última jogada funcionou? Só julga depois que o jogo teve tempo de processar a troca
-            //    (julgar cedo demais fazia o bot achar que jogadas boas falharam).
-            if (lastMove != null && now - moveDoneAt < 550) { Thread.sleep(40); continue }
+            // 4) a última jogada funcionou?
+            //    Trocas normais (Pokémon do time reconhecidos): NÃO espera — se não funcionou, percebe na próxima
+            //    decisão (ia repetir a mesma troca com o tabuleiro igual) e descarta só essa troca.
+            //    Tentativas incertas (casa vazia / embaixo de nuvem): espera o jogo processar para saber se valeu.
             val lm = lastMove
             val bm = beforeMove
             if (lm != null && bm != null) {
-                // Funcionou = o Pokémon arrastado apareceu no destino, OU o tabuleiro mudou de verdade incluindo as
-                // casas mexidas. (Nuvem/efeito se mexendo sozinho não conta como jogada que funcionou.)
-                val arrived = reader.dist(feats[lm.to], bm[lm.from]) < knownThr
-                val cellsChanged = reader.dist(bm[lm.from], feats[lm.from]) > 25f || reader.dist(bm[lm.to], feats[lm.to]) > 25f
-                val moved = arrived || (cellsChanged && reader.changedCells(bm, feats, 30f) >= 4)
-                val wasEmptyMove = lm.toEmpty
-                if (lm.explore) { if (moved) cloudOk++ else cloudFails++; if (cloudFails >= 4 && cloudOk == 0) cloudOff = true }
-                else if (wasEmptyMove) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
-                if (moved) megaCount += lastMegaCells
-                if (!moved) {
-                    failed.add(lm.key)
-                    cellFails[lm.from]++; cellFails[lm.to]++
-                    sigOf(bm[lm.from]).fails++; sigOf(bm[lm.to]).fails++
-                    if (!wasEmptyMove) failStreak++
-                    if (failStreak >= 15) { autoStop("⏹ Parado: as jogadas não estão funcionando"); return }
+                if (lm.toEmpty) {
+                    if (now - moveDoneAt < 550) { Thread.sleep(40); continue }
+                    val arrived = reader.dist(feats[lm.to], bm[lm.from]) < knownThr
+                    val cellsChanged = reader.dist(bm[lm.from], feats[lm.from]) > 25f || reader.dist(bm[lm.to], feats[lm.to]) > 25f
+                    val moved = arrived || (cellsChanged && reader.changedCells(bm, feats, 30f) >= 4)
+                    if (lm.explore) { if (moved) cloudOk++ else cloudFails++; if (cloudFails >= 4 && cloudOk == 0) cloudOff = true }
+                    else { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
+                    if (moved) { megaCount += lastMegaCells; failed.clear(); cellFails.fill(0) }
+                    else { failed.add(lm.key); cellFails[lm.to]++ }
                 } else {
-                    sigOf(bm[lm.from]).ok++; sigOf(bm[lm.to]).ok++
-                    failed.clear(); cellFails.fill(0); failStreak = 0
+                    if (reader.changedCells(bm, feats, 30f) >= 4) {
+                        megaCount += lastMegaCells; failed.clear(); cellFails.fill(0); lastNormal = null
+                    } else {
+                        lastNormal = lm; lastNormalBefore = bm   // talvez o jogo só não processou ainda
+                    }
                 }
                 lastMove = null; beforeMove = null
             }
@@ -691,8 +691,15 @@ class BotService : AccessibilityService() {
                 }
                 if (opp != null) dexTxt = " • vs ${opp.name}"
             }
-            val mv = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
+            fun bestMove() = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
                 if (useDex) dkind else null, exploreCells)
+            var mv = bestMove()
+            // ia repetir a mesma troca e o tabuleiro não mudou desde então: ela não funcionou → descarta e escolhe outra
+            val ln = lastNormal; val lb = lastNormalBefore
+            if (mv != null && ln != null && lb != null && mv.key == ln.key && reader.changedCells(lb, feats, 30f) < 3) {
+                failed.add(mv.key); lastNormal = null
+                mv = bestMove()
+            } else if (ln != null && lb != null && reader.changedCells(lb, feats, 30f) >= 4) lastNormal = null
             lastMegaCells = 0
             if (mv != null && useDex) {
                 val mb = knownEntry.firstOrNull { it != null && !it.isMega && Dex.megaOf(it) != null }?.baseName
