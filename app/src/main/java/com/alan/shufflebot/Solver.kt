@@ -1,6 +1,6 @@
 package com.alan.shufflebot
 
-data class Move(val from: Int, val to: Int, val score: Int) {
+data class Move(val from: Int, val to: Int, val score: Int, val toEmpty: Boolean = false) {
     val key: Long get() = pairKey(from, to)
 }
 
@@ -33,7 +33,7 @@ object Solver {
      */
     fun best(
         lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray,
-        frozen: BooleanArray? = null, roles: Array<Role>? = null,
+        frozen: BooleanArray? = null, roles: Array<Role>? = null, empty: BooleanArray? = null,
     ): Move? {
         val total = n * n
         val fz = frozen ?: BooleanArray(total)
@@ -42,17 +42,21 @@ object Solver {
         val f = BooleanArray(total)
         for (i in 0 until total) {
             if (blocked[i]) continue
-            for (j in i + 1 until total) {
-                if (blocked[j] || lab[i] == lab[j]) continue
+            for (j in 0 until total) {
+                if (j == i) continue
+                val toEmpty = empty != null && empty[j]
+                if (!toEmpty) {
+                    if (j < i || blocked[j] || lab[i] == lab[j]) continue
+                }
                 if (failed.contains(pairKey(i, j))) continue
                 lab.copyInto(b); fz.copyInto(f)
-                b[i] = lab[j]; b[j] = lab[i]
+                if (toEmpty) { b[j] = lab[i]; b[i] = -5000 - i } else { b[i] = lab[j]; b[j] = lab[i] }
                 val firstWave = BooleanArray(total)
-                val s = simulate(b, f, n, roles, firstWave)
+                var s = simulate(b, f, n, roles, firstWave)
                 if (s <= 0) continue
+                if (toEmpty) s -= 5        // não é certeza que o jogo aceita; prefere trocas normais
                 if (best == null || s > best.score) {
-                    // arrasta a peça que forma a combinação no destino
-                    best = if (firstWave[j]) Move(i, j, s) else Move(j, i, s)
+                    best = if (toEmpty) Move(i, j, s, true) else if (firstWave[j]) Move(i, j, s) else Move(j, i, s)
                 }
             }
         }

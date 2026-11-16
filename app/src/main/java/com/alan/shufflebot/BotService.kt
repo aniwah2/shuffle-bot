@@ -375,7 +375,11 @@ class BotService : AccessibilityService() {
     private fun botLoop() {
         val prefs = Prefs(this)
         val reader = BoardReader()
-        val g = prefs.geom() ?: return       // usa a grade salva; nunca reajusta durante o jogo
+        var g = prefs.geom() ?: return       // usa a grade salva; só reajusta antes da batalha, se não conseguir ler
+        var lastFitTry = 0L
+        var emptyMovesOff = false        // se soltar em casa vazia não funcionar no jogo, desliga
+        var emptyFails = 0; var emptyOk = 0
+        var boardishSince = 0L
         val total = g.n * g.n
         val thr = prefs.threshold.toFloat()
         val team = prefs.team
@@ -439,6 +443,7 @@ class BotService : AccessibilityService() {
             val bmp = screenshot()
             if (bmp == null) { Thread.sleep(60); continue }
             val feats = reader.features(bmp, g)
+            val border = if (feats != null) reader.frozenByBorder(bmp, g) else null
             bmp.recycle()
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
             val now = System.currentTimeMillis()
@@ -451,7 +456,8 @@ class BotService : AccessibilityService() {
             }
             unstable = 0
 
-            val view = reader.analyze(feats, thr)
+            val view = reader.analyze(feats, thr, border)
+            val emptyCells = if (emptyMovesOff) null else view.isEmpty
 
             // 2) ainda não sabe quais Pokémon são desta batalha: aprende com um tabuleiro claro e parado
             if (known.isEmpty()) {
@@ -468,6 +474,16 @@ class BotService : AccessibilityService() {
                 }
                 if (known.isEmpty()) {
                     if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }
+                    // parece tabuleiro mas não dá pra ler direito: a grade pode estar imprecisa → ajusta (só aceita se melhorar)
+                    val p = reader.boardProblem(view)
+                    if (p != null && !p.startsWith("quase tudo liso") && now - lastFitTry > 8000) {
+                        if (boardishSince == 0L) boardishSince = now
+                        if (now - boardishSince > 1500) {
+                            lastFitTry = now
+                            g = autoFit(prefs, g, reader); prev = null
+                            continue
+                        }
+                    } else if (p == null || p.startsWith("quase tudo liso")) boardishSince = 0L
                     status("⏳ Aguardando a batalha…")
                     continue
                 }
@@ -478,9 +494,10 @@ class BotService : AccessibilityService() {
             // Blocos não contam a favor nem contra (fases com muitos blocos).
             val knownFree = BooleanArray(total) { view.movable[it] && isKnown(feats[it]) }
             val knownSpecies = (0 until total).filter { knownFree[it] }.map { view.species[it] }.toHashSet()
-            val recognized = (0 until total).count { knownFree[it] || (view.frozen[it] && view.species[it] in knownSpecies) }
-            val needed = maxOf(8, (total - view.blocks) / 2)
-            if (recognized < needed || view.empty > 6) {
+            val knownFreeCount = knownFree.count { it }
+            val recognized = (0 until total).count { knownFree[it] || (view.frozen[it] && (view.species[it] in knownSpecies || border?.get(it) == true)) }
+            val needed = maxOf(8, (total - view.blocks) * 2 / 5)
+            if (recognized < needed || knownFreeCount < 4 || view.empty > 9) {
                 // Parte do tabuleiro ainda é conhecida e o resto forma Pokémon consistentes (o Mega evoluiu e
                 // mudou de ícone, ou entrou Pokémon novo): se isso se repetir em 2 prints seguidos, aprende.
                 val partial = recognized >= maxOf(6, (total - view.blocks) * 3 / 10)
@@ -510,11 +527,14 @@ class BotService : AccessibilityService() {
             val lm = lastMove
             val bm = beforeMove
             if (lm != null && bm != null) {
-                if (reader.changedCells(bm, feats) < 3) {
+                val moved = reader.dist(bm[lm.from], feats[lm.from]) > 25f || reader.dist(bm[lm.to], feats[lm.to]) > 25f
+                val wasEmptyMove = lm.toEmpty
+                if (wasEmptyMove) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
+                if (!moved) {
                     failed.add(lm.key)
                     cellFails[lm.from]++; cellFails[lm.to]++
                     sigOf(bm[lm.from]).fails++; sigOf(bm[lm.to]).fails++
-                    failStreak++
+                    if (!wasEmptyMove) failStreak++
                     if (failStreak >= 15) { autoStop("⏹ Parado: as jogadas não estão funcionando"); return }
                 } else {
                     sigOf(bm[lm.from]).ok++; sigOf(bm[lm.to]).ok++
@@ -527,7 +547,7 @@ class BotService : AccessibilityService() {
             val types = view.types
             val blocked = BooleanArray(total) { !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) }
             val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
-            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen, roles)
+            val mv = Solver.best(view.species, g.n, failed, blocked, view.frozen, roles, emptyCells)
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
                 failed.clear(); cellFails.fill(0)
@@ -564,6 +584,7 @@ class BotService : AccessibilityService() {
             if (shot == null) { status("Não consegui tirar o print"); return@Thread }
             val reader = BoardReader()
             val feats = reader.features(shot, g)
+            val dbgBorder = if (feats != null) reader.frozenByBorder(shot, g) else null
             val out = shot.copy(Bitmap.Config.ARGB_8888, true)
             shot.recycle()
 
@@ -582,7 +603,7 @@ class BotService : AccessibilityService() {
             if (feats == null) {
                 lines.add("Grade fora da tela")
             } else {
-                val view = reader.analyze(feats, prefs.threshold.toFloat())
+                val view = reader.analyze(feats, prefs.threshold.toFloat(), dbgBorder)
                 val fz = view.frozen.count { it }
                 lines.add("tipos: ${view.types} • blocos: ${view.blocks} • gelo: $fz • vazias: ${view.empty} • tolerância: ${prefs.threshold}")
                 lines.add("diagnóstico: ${reader.boardProblem(view) ?: "tabuleiro OK"} • brilho ${reader.brightness(feats).toInt()}")

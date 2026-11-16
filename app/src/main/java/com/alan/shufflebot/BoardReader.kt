@@ -27,6 +27,8 @@ class BoardView(
     val frozen: BooleanArray,
     val blocks: Int,
     val empty: Int,
+    /** Casa vazia (sem peça) — dá para tentar soltar um Pokémon nela. */
+    val isEmpty: BooleanArray = BooleanArray(species.size),
 ) {
     val types: Int get() = species.filter { it >= 0 }.distinct().size
 }
@@ -68,6 +70,39 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
             }
             f
         }
+    }
+
+    /**
+     * Gelo/barreira: a casa congelada tem uma moldura clara e sem cor em volta do ícone
+     * (casas normais mostram o fundo marrom do tabuleiro). Mede a faixa da borda, sem os cantos.
+     */
+    fun frozenByBorder(bmp: Bitmap, g: BoardGeom): BooleanArray {
+        val cs = g.cell
+        val res = BooleanArray(g.n * g.n)
+        for (i in res.indices) {
+            val x0 = (g.left + (i % g.n) * cs).toInt()
+            val y0 = (g.top + (i / g.n) * cs).toInt()
+            val n = cs.toInt()
+            if (x0 < 0 || y0 < 0 || x0 + n > bmp.width || y0 + n > bmp.height) continue
+            val a = (n * 0.03f).toInt(); val b = (n * 0.12f).toInt().coerceAtLeast(a + 1)
+            var bright = 0; var tot = 0
+            fun px(x: Int, y: Int) {
+                val c = bmp.getPixel(x0 + x, y0 + y)
+                val r = (c shr 16) and 0xFF; val gg = (c shr 8) and 0xFF; val bb = c and 0xFF
+                val lum = (r + gg + bb) / 3
+                val sat = maxOf(r, gg, bb) - minOf(r, gg, bb)
+                if (lum > 185 && sat < 30) bright++
+                tot++
+            }
+            var t = b
+            while (t < n - b) {          // amostra a cada 3 px nas 4 faixas
+                var k = a
+                while (k < b) { px(t, k); px(t, n - 1 - k); px(k, t); px(n - 1 - k, t); k += 3 }
+                t += 3
+            }
+            res[i] = tot > 0 && bright > tot * 0.6f
+        }
+        return res
     }
 
     /** Diferença média por canal (0..255). */
@@ -126,7 +161,7 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
      * Agrupa as casas, reconhece blocos/casas vazias e liga cada Pokémon congelado (barreira)
      * à espécie livre correspondente — no jogo, congelados combinam com os livres da mesma espécie.
      */
-    fun analyze(feats: Array<FloatArray>, thr: Float): BoardView {
+    fun analyze(feats: Array<FloatArray>, thr: Float, borderFrozen: BooleanArray? = null): BoardView {
         val lab = cluster(feats, thr)
         val k = (lab.maxOrNull() ?: 0) + 1
         val dim = feats[0].size
@@ -177,15 +212,18 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
         val movable = BooleanArray(n)
         val frozen = BooleanArray(n)
         var nBlocks = 0; var nEmpty = 0
+        val emptyMask = BooleanArray(n)
         for (i in 0 until n) {
             when (kind[lab[i]]) {
                 0 -> { species[i] = spOf[lab[i]]; movable[i] = true }
                 1 -> { species[i] = spOf[lab[i]]; frozen[i] = true }
                 2 -> { species[i] = -(i + 1); nBlocks++ }
-                else -> { species[i] = -(i + 1); nEmpty++ }
+                else -> { species[i] = -(i + 1); nEmpty++; emptyMask[i] = true }
             }
+            // a moldura do gelo manda: congelado nunca é arrastável, mesmo sem par livre no tabuleiro
+            if (borderFrozen != null && borderFrozen[i] && species[i] >= 0) { frozen[i] = true; movable[i] = false }
         }
-        return BoardView(species, movable, frozen, nBlocks, nEmpty)
+        return BoardView(species, movable, frozen, nBlocks, nEmpty, emptyMask)
     }
 
     /**
