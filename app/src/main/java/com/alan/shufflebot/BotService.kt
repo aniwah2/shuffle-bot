@@ -395,6 +395,9 @@ class BotService : AccessibilityService() {
         var g = geomOrGuess(prefs)            // grade salva ou estimada; só reajusta antes da batalha, se não conseguir ler
         var lastFitTry = 0L
         var emptyMovesOff = false        // se soltar em casa vazia não funcionar no jogo, desliga
+        var cloudOff = false; var cloudFails = 0; var cloudOk = 0   // idem para tentar embaixo de nuvem
+        var megaCount = 0                // ícones do Mega já combinados (estimativa)
+        var lastMegaCells = 0
 
         // ---- Shuffle Dex: quem é cada Pokémon do time e quem é o inimigo
         val useDex = prefs.useDex && runCatching { Dex.load(this) }.isSuccess
@@ -603,7 +606,9 @@ class BotService : AccessibilityService() {
                 val cellsChanged = reader.dist(bm[lm.from], feats[lm.from]) > 25f || reader.dist(bm[lm.to], feats[lm.to]) > 25f
                 val moved = arrived || (cellsChanged && reader.changedCells(bm, feats, 30f) >= 4)
                 val wasEmptyMove = lm.toEmpty
-                if (wasEmptyMove) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
+                if (lm.explore) { if (moved) cloudOk++ else cloudFails++; if (cloudFails >= 4 && cloudOk == 0) cloudOff = true }
+                else if (wasEmptyMove) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
+                if (moved) megaCount += lastMegaCells
                 if (!moved) {
                     failed.add(lm.key)
                     cellFails[lm.from]++; cellFails[lm.to]++
@@ -631,6 +636,22 @@ class BotService : AccessibilityService() {
             // Só mexe em casas onde reconhece um Pokémon desta batalha. Nuvem, caixote, bloco, o botão do gravador
             // de tela ou qualquer outra coisa por cima ficam de fora (nem arrasta, nem conta como combinação).
             val blocked = BooleanArray(total) { !knownFree[it] || !view.movable[it] || cellFails[it] >= 1 || unmovable(feats[it]) || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
+            // Que disrupção é cada casa (pela aparência do jogo): rocha, bloco, nuvem, metal; gelo = moldura clara
+            val dkind = IntArray(total)
+            val dCount = HashMap<String, Int>()
+            if (useDex) for (i in 0 until total) {
+                if (knownFree[i]) continue
+                if (view.frozen[i]) { dCount["gelo"] = (dCount["gelo"] ?: 0) + 1; continue }
+                val k = Dex.disruptionKind(feats[i])
+                if (k != null) {
+                    dkind[i] = when (k) { "rocha" -> 1; "bloco" -> 2; "nuvem" -> 3; else -> 4 }
+                    val key = if (k == "metal") "gelo" else k
+                    dCount[key] = (dCount[key] ?: 0) + 1
+                } else if (spName[view.species[i]]?.let { it !in teamNames } == true) {
+                    dCount["estranho"] = (dCount["estranho"] ?: 0) + 1   // Pokémon que não é do seu time
+                }
+            }
+            val exploreCells = if (cloudOff || !useDex) null else BooleanArray(total) { dkind[it] == 3 }
             // o mesmo Pokémon dividido em grupos (nuvem/efeito) vira uma espécie só, para combinar entre si
             val canon = HashMap<Int, Int>(); val firstByName = HashMap<String, Int>()
             for ((sp, n) in spName) { val f0 = firstByName.getOrPut(n) { sp }; canon[sp] = f0 }
@@ -650,13 +671,24 @@ class BotService : AccessibilityService() {
                     for (k in known.indices) { val d = reader.dist(known[k], look); if (d < bd) { bd = d; bi = k } }
                     if (bi >= 0 && bd < knownThr) ents[sp] = knownEntry.getOrNull(bi)
                 }
-                val megaEvolved = knownEntry.any { it?.isMega == true }
-                val disruptions = view.blocks > 0 || view.frozen.any { it }
+                val megaBase = knownEntry.firstOrNull { it != null && !it.isMega && Dex.megaOf(it) != null }
+                val megaNeed = megaBase?.let { Dex.megaOf(it)?.megaIcons } ?: 0
+                val megaEvolved = knownEntry.any { it?.isMega == true } || (megaNeed > 0 && megaCount >= megaNeed)
+                val disruptions = dCount
                 val opp = opponentRef.get()
                 value = SpeciesValue.from(ents, opp, disruptions, megaEvolved)
+                if (megaBase != null && megaNeed > 0) {
+                    dexTxt += if (megaEvolved) " • Mega ✓" else " • Mega ${minOf(megaCount, megaNeed)}/$megaNeed"
+                }
                 if (opp != null) dexTxt = " • vs ${opp.name}"
             }
-            val mv = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value)
+            val mv = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
+                if (useDex) dkind else null, exploreCells)
+            lastMegaCells = 0
+            if (mv != null && useDex) {
+                val mb = knownEntry.firstOrNull { it != null && !it.isMega && Dex.megaOf(it) != null }?.baseName
+                if (mb != null) lastMegaCells = mv.cells.count { spName[view.species[it]] == mb }
+            }
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
                 failed.clear(); cellFails.fill(0)
@@ -666,9 +698,14 @@ class BotService : AccessibilityService() {
 
             moves++
             val extra = buildString {
-                if (view.blocks > 0) append(" • ${view.blocks} blocos")
-                val fz = view.frozen.count { it }
-                if (fz > 0) append(" • $fz no gelo")
+                if (dCount.isNotEmpty()) {
+                    for ((k, c) in dCount) append(" • $c $k")
+                } else {
+                    if (view.blocks > 0) append(" • ${view.blocks} blocos")
+                    val fz = view.frozen.count { it }
+                    if (fz > 0) append(" • $fz no gelo")
+                }
+                if (mv.explore) append(" • tentando na nuvem")
             }
             val teamTxt = if (roles != null && roles.any { it != Role.NORMAL }) " • time ✓" else ""
             status("Jogando$dexTxt • $types tipos$extra$teamTxt • jogada $moves")

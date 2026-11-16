@@ -139,7 +139,11 @@ class FramesTest {
         print("[nuvem] casas que o bot pode mexer (. = nuvem/caixote/desconhecido):\n$sb")
         val sp = IntArray(36) { if (knownFree[it]) (canon[v.species[it]] ?: v.species[it]) else -(it + 1) }
         val mv = Solver.best(sp, 6, emptySet(), BooleanArray(36) { !knownFree[it] })
-        println("[nuvem] jogada escolhida: $mv")
+        println("[nuvem] jogada escolhida (só visíveis): $mv")
+        val dk = IntArray(36) { if (knownFree[it]) 0 else when (Dex.disruptionKind(f[it])) { "rocha" -> 1; "bloco" -> 2; "nuvem" -> 3; "metal" -> 4; else -> 0 } }
+        println("[nuvem] disrupções: " + (0 until 36).groupingBy { dk[it] }.eachCount().filterKeys { it > 0 }.mapKeys { listOf("", "rocha", "bloco", "nuvem", "metal")[it.key] })
+        val mv2 = Solver.best(sp, 6, emptySet(), BooleanArray(36) { !knownFree[it] }, dkind = dk, explore = BooleanArray(36) { dk[it] == 3 })
+        println("[nuvem] jogada com rochas/nuvens: $mv2 (de ${mv2?.from?.let { "(${it / 6},${it % 6})" }} para ${mv2?.to?.let { "(${it / 6},${it % 6})" }})")
     }
 
     @Test fun dex_caixoteNaoEPokemon() {
@@ -152,7 +156,7 @@ class FramesTest {
         val feats = r.features(img, g)!!
         val v = r.analyze(feats, 15f, r.frozenByBorder(img, g))
         val counts = v.species.filter { it >= 0 }.groupingBy { it }.eachCount()
-        for ((sp, look) in r.speciesLook(v, feats)) println("[dex] espécie $sp (${counts[sp]} casas) -> ${Dex.identify(look)?.name ?: "NÃO É POKÉMON (disrupção)"}")
+        for ((sp, look) in r.speciesLook(v, feats)) println("[dex] espécie $sp (${counts[sp]} casas) -> ${Dex.identify(look)?.name ?: "NÃO É POKÉMON (${Dex.disruptionKind(look) ?: "?"})"}")
     }
 
     @Test fun semCalibracao_estimaEAjusta() {

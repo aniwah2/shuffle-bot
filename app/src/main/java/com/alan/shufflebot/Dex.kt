@@ -14,6 +14,10 @@ class DexEntry(
     val rates: FloatArray,     // chance de ativar com 3 / 4 / 5
     val mult: Float,           // multiplicador de dano da habilidade
     val megaIcons: Int,        // ícones para Mega evoluir (0 = não é Mega)
+    val removes: String? = null,   // o que a habilidade remove: rocha, bloco, nuvem, gelo, estranho
+    val removeCount: Int = 0,
+    val megaRemoves: Boolean = false, // efeito Mega apaga rochas/blocos/etc.
+    val megaIconsMin: Int = 0,
 ) {
     val isMega: Boolean get() = name.startsWith("Mega ") || name.startsWith("Primal ")
     val baseName: String get() = name.substringBefore(" (").removePrefix("Mega ").removePrefix("Primal ").trim()
@@ -31,6 +35,18 @@ object Dex {
     private val superEff = HashMap<String, Set<String>>()
     private val notVery = HashMap<String, Set<String>>()
     private val byName = HashMap<String, DexEntry>()
+    private val disr = ArrayList<Pair<String, FloatArray>>()
+
+    /** Qual disrupção é essa casa (nuvem, rocha, bloco, metal)? null se não for nenhuma conhecida. */
+    fun disruptionKind(f: FloatArray): String? {
+        for ((k, v) in disr) {
+            if (v.size != f.size) continue
+            var s = 0f
+            for (j in v.indices) s += abs(v[j] - f[j])
+            if (s / v.size < 12f) return k
+        }
+        return null
+    }
 
     fun load(ctx: Context) {
         if (ready) return
@@ -54,12 +70,21 @@ object Dex {
                     o.getString("n"), o.getString("t"), o.optInt("ap", 0), o.optString("s"), o.optString("f"),
                     floatArrayOf(r.getDouble(0).toFloat(), r.getDouble(1).toFloat(), r.getDouble(2).toFloat()),
                     o.optDouble("m", 1.0).toFloat(), o.optInt("mi", 0),
+                    if (o.has("rt") && !o.isNull("rt")) o.getString("rt") else null, o.optInt("rn", 0),
+                    o.optInt("mr", 0) == 1, o.optInt("mim", 0),
                 )
                 list.add(e)
                 byName.putIfAbsent(norm(e.name), e)
             }
             entries = list
             feats = spriteBytes
+            if (json.has("disr")) {
+                val da = json.getJSONArray("disr")
+                for (i in 0 until da.length()) {
+                    val o = da.getJSONObject(i); val v = o.getJSONArray("v")
+                    disr.add(Pair(o.getString("k"), FloatArray(v.length()) { v.getDouble(it).toFloat() }))
+                }
+            }
             val types = json.getJSONObject("types")
             for (t in types.keys()) {
                 val o = types.getJSONObject(t)
@@ -122,24 +147,35 @@ class SpeciesValue(n: Int) {
 
     companion object {
         fun from(
-            entries: Array<DexEntry?>, opponent: DexEntry?, disruptions: Boolean, megaEvolved: Boolean,
+            entries: Array<DexEntry?>, opponent: DexEntry?, disruptions: Map<String, Int>, megaEvolved: Boolean,
         ): SpeciesValue {
             val v = SpeciesValue(entries.size)
+            val breakable = (disruptions["rocha"] ?: 0) + (disruptions["bloco"] ?: 0)
             for (sp in entries.indices) {
                 val e = entries[sp] ?: continue
                 val tm = if (opponent != null) Dex.typeMult(e.type, opponent.type) else 1f
                 var w = (e.ap / 115f) * tm
-                if (e.isMega) w *= 1.3f                                   // efeito Mega ao combinar
-                else if (!megaEvolved && Dex.megaOf(e) != null) w *= 1.6f // encher a barra do Mega
+                val mega = Dex.megaOf(e)
+                if (e.isMega) {
+                    w *= 1.3f
+                    // Mega que apaga rochas/blocos (ex.: Mega Aerodactyl): cada combinação dele limpa o caminho
+                    if (e.megaRemoves && breakable > 0) for (k in 0..2) v.flat[sp][k] += 12f * minOf(breakable, 10) / 2f
+                } else if (!megaEvolved && mega != null) {
+                    // encher a barra do Mega; prioridade maior se o efeito Mega resolve as disrupções da fase
+                    w *= if (mega.megaRemoves && breakable > 0) 2.2f else 1.6f
+                }
                 v.weight[sp] = w
                 val r = e.rates
-                when {
-                    e.func.startsWith("Dano") -> for (k in 0..2) v.dmgFactor[sp][k] = 1f + r[k] * (e.mult - 1f).coerceAtLeast(0f)
-                    e.func.startsWith("Remover disrupções") -> if (disruptions) for (k in 0..2) v.flat[sp][k] = r[k] * 20f
-                    e.func.startsWith("Atrasar") -> for (k in 0..2) v.flat[sp][k] = r[k] * 6f
-                    e.func.startsWith("Mega Boost") -> if (!megaEvolved) for (k in 0..2) v.flat[sp][k] = r[k] * 12f
+                if (e.func.contains("Dano")) for (k in 0..2) v.dmgFactor[sp][k] = 1f + r[k] * (e.mult - 1f).coerceAtLeast(0f)
+                // habilidade de remoção vale pelo que tem para remover AGORA (ex.: Cloud Clear com nuvens na tela)
+                val target = e.removes
+                if (target != null) {
+                    val present = disruptions[target] ?: 0
+                    if (present > 0) for (k in 0..2) v.flat[sp][k] += r[k] * 12f * minOf(present, maxOf(1, e.removeCount))
                 }
-                // habilidades que só ativam com 4/5 (Power of 4 etc.): valoriza combinações maiores
+                if (e.func.startsWith("Atrasar")) for (k in 0..2) v.flat[sp][k] += r[k] * 6f
+                if (e.func.startsWith("Mega Boost") && !megaEvolved) for (k in 0..2) v.flat[sp][k] += r[k] * 12f
+                // habilidades que só ativam com 4/5 (Power of 4, Super Voice…): valoriza combinações maiores
                 v.bigBonus[sp] = 1f + (r[1] + r[2]) * 0.5f * (e.mult - 1f).coerceAtLeast(0f)
             }
             return v

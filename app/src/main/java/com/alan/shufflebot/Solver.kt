@@ -1,6 +1,10 @@
 package com.alan.shufflebot
 
-data class Move(val from: Int, val to: Int, val score: Int, val toEmpty: Boolean = false) {
+data class Move(
+    val from: Int, val to: Int, val score: Int, val toEmpty: Boolean = false,
+    val explore: Boolean = false,              // tentativa numa casa coberta por nuvem
+    val cells: IntArray = IntArray(0),         // casas que a combinação deve apagar (1ª onda)
+) {
     val key: Long get() = pairKey(from, to)
 }
 
@@ -35,6 +39,8 @@ object Solver {
         lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray,
         frozen: BooleanArray? = null, roles: Array<Role>? = null, empty: BooleanArray? = null,
         value: SpeciesValue? = null,
+        dkind: IntArray? = null,          // 1 rocha, 2 bloco, 3 nuvem, 4 metal (por casa)
+        explore: BooleanArray? = null,    // casas com nuvem onde dá para tentar soltar um Pokémon
     ): Move? {
         val total = n * n
         val fz = frozen ?: BooleanArray(total)
@@ -45,7 +51,8 @@ object Solver {
             if (blocked[i]) continue
             for (j in 0 until total) {
                 if (j == i) continue
-                val toEmpty = empty != null && empty[j]
+                val toCloud = explore != null && explore[j]
+                val toEmpty = (empty != null && empty[j]) || toCloud
                 if (!toEmpty) {
                     if (j < i || blocked[j] || lab[i] == lab[j]) continue
                 }
@@ -53,11 +60,14 @@ object Solver {
                 lab.copyInto(b); fz.copyInto(f)
                 if (toEmpty) { b[j] = lab[i]; b[i] = -5000 - i } else { b[i] = lab[j]; b[j] = lab[i] }
                 val firstWave = BooleanArray(total)
-                var s = simulate(b, f, n, roles, firstWave, value)
+                var s = simulate(b, f, n, roles, firstWave, value, dkind)
                 if (s <= 0) continue
-                if (toEmpty) s -= 5        // não é certeza que o jogo aceita; prefere trocas normais
+                if (toCloud) s -= 10      // o que está embaixo da nuvem é desconhecido: só se não houver coisa melhor
+                else if (toEmpty) s -= 5  // não é certeza que o jogo aceita; prefere trocas normais
                 if (best == null || s > best.score) {
-                    best = if (toEmpty) Move(i, j, s, true) else if (firstWave[j]) Move(i, j, s) else Move(j, i, s)
+                    val cells = (0 until total).filter { firstWave[it] }.toIntArray()
+                    best = if (toEmpty) Move(i, j, s, true, toCloud, cells)
+                    else if (firstWave[j]) Move(i, j, s, cells = cells) else Move(j, i, s, cells = cells)
                 }
             }
         }
@@ -67,6 +77,7 @@ object Solver {
     /** Simula combinações + quedas + combos. Retorna a nota (0 = não combina nada). */
     private fun simulate(
         b: IntArray, f: BooleanArray, n: Int, roles: Array<Role>?, firstWave: BooleanArray, value: SpeciesValue?,
+        dkind: IntArray?,
     ): Int {
         var score = 0f
         var unknown = -1000
@@ -112,14 +123,16 @@ object Solver {
                 val sp = b[p]
                 val rl = roleOf(roles, sp)
                 waveScore += 10f * (if (rl == Role.NORMAL && value != null && sp >= 0 && sp < value.weight.size) value.weight[sp] else rl.weight)
-                if (f[p]) waveScore += 8f                     // quebra barreira
+                if (f[p]) waveScore += if (p / n == 0) 18f else 12f   // quebra gelo (no topo libera a coluna)
                 if (wave == 0) firstWave[p] = true
-                // peças "lisas" (bloco/pedra) ao lado da combinação costumam quebrar
-                val r = p / n; val c = p % n
-                if (r > 0 && b[p - n] < 0 && b[p - n] > -1000) waveScore += 3f
-                if (r < n - 1 && b[p + n] < 0 && b[p + n] > -1000) waveScore += 3f
-                if (c > 0 && b[p - 1] < 0 && b[p - 1] > -1000) waveScore += 3f
-                if (c < n - 1 && b[p + 1] < 0 && b[p + 1] > -1000) waveScore += 3f
+                // disrupção ao lado da combinação: rocha quebra, nuvem costuma sumir; bloco/metal não
+                if (dkind != null && wave == 0) {
+                    val r = p / n; val c = p % n
+                    for (q in intArrayOf(if (r > 0) p - n else -1, if (r < n - 1) p + n else -1, if (c > 0) p - 1 else -1, if (c < n - 1) p + 1 else -1)) {
+                        if (q < 0) continue
+                        when (dkind[q]) { 1 -> waveScore += 8f; 3 -> waveScore += 4f }
+                    }
+                }
             }
             // combos depois da primeira onda: valem um pouco menos (incerteza), mas cada combo ganha bônus
             score += if (wave == 0) waveScore else waveScore * 0.8f + 12f
