@@ -409,9 +409,9 @@ class BoardReader(private val blocks: Int = 8, private val inset: Float = 0.18f)
         bestS = score(L0, T0, S0, 1)
         for (kk in -4..4) {
             val sz = S0 * (1 + kk * 0.0025f)
-            for (dx in -1..1) for (dy in -1..1) {
-                val l = L0 + (S0 - sz) / 2 + dx * 0.06f * sz / g.n
-                val t = T0 + (S0 - sz) / 2 + dy * 0.06f * sz / g.n
+            for (dx in -3..3) for (dy in -3..3) {
+                val l = L0 + (S0 - sz) / 2 + dx * 0.04f * sz / g.n
+                val t = T0 + (S0 - sz) / 2 + dy * 0.04f * sz / g.n
                 val sc = score(l, t, sz, 1)
                 if (sc < bestS) { bestS = sc; bL = l; bT = t; bSz = sz }
             }
