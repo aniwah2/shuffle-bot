@@ -351,7 +351,8 @@ class BotService : AccessibilityService() {
     private fun startBot() {
         if (frame != null) toggleCalibration()
         if (teamView != null) toggleTeam()
-        if (Prefs(this).fastCapture && CaptureService.instance == null) {
+        if (Prefs(this).fastCapture && CaptureService.instance == null && !captureAsked) {
+            captureAsked = true
             status("Permita a captura da tela (escolha \"Tela inteira\")")
             CaptureActivity.request(this)
             return
@@ -413,6 +414,8 @@ class BotService : AccessibilityService() {
     private fun botLoop() {
         val prefs = Prefs(this)
         val reader = BoardReader()
+        if (CaptureService.instance != null) verifyCapture()
+        var lastCapCheck = System.currentTimeMillis()
         var g = geomOrGuess(prefs)            // grade salva ou estimada; só reajusta antes da batalha, se não conseguir ler
         var lastFitTry = 0L
         var emptyMovesOff = false        // se soltar em casa vazia não funcionar no jogo, desliga
@@ -546,6 +549,10 @@ class BotService : AccessibilityService() {
                 for (l in learned) knownEntry.add(if (useDex) Dex.identify(l) else null)
                 if (known.isEmpty()) {
                     if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }
+                    // esperando há um tempo com captura rápida: confere de novo se a imagem dela está certa
+                    if (CaptureService.instance != null && now - lastCapCheck > 4000) {
+                        lastCapCheck = now; verifyCapture(); prev = null; continue
+                    }
                     // parece tabuleiro mas não dá pra ler direito: a grade pode estar imprecisa → ajusta (só aceita se melhorar)
                     val p = reader.boardProblem(view)
                     if (p != null && !p.startsWith("quase tudo liso") && now - lastFitTry > 3000) {
@@ -948,6 +955,49 @@ class BotService : AccessibilityService() {
         val img = ArrayImg(bmp.width, bmp.height, px)
         bmp.recycle()
         return img
+    }
+
+    @Volatile private var captureAsked = false
+
+    /**
+     * Confere se a captura rápida mostra a MESMA imagem que o print normal. Corrige cor trocada;
+     * se não bater, desliga a captura rápida e o bot segue com prints (que já funcionavam).
+     * Retorna true se a captura está ok.
+     */
+    private fun verifyCapture(): Boolean {
+        val cap = CaptureService.instance ?: return false
+        val shot = screenshotRetry() ?: return true          // sem print para comparar: não decide agora
+        val ref = IntArray(shot.width * shot.height)
+        shot.getPixels(ref, 0, shot.width, 0, 0, shot.width, shot.height)
+        val W = shot.width; val H = shot.height
+        shot.recycle()
+        val f = cap.grab() ?: return false
+        if (f.width != W || f.height != H) { disableCapture("tamanho diferente (${f.width}x${f.height} vs ${W}x$H)"); return false }
+        fun diff(swap: Boolean): Float {
+            var s = 0L; var n = 0
+            var y = H / 3
+            while (y < H * 95 / 100) {
+                var x = 8
+                while (x < W - 8) {
+                    val a = ref[y * W + x]; var b = f.px[y * W + x]
+                    if (swap) b = (b and 0xFF00FF00.toInt()) or ((b and 0xFF) shl 16) or ((b shr 16) and 0xFF)
+                    s += Math.abs(((a shr 16) and 255) - ((b shr 16) and 255)) + Math.abs(((a shr 8) and 255) - ((b shr 8) and 255)) + Math.abs((a and 255) - (b and 255))
+                    n += 3; x += 16
+                }
+                y += 16
+            }
+            return if (n == 0) 999f else s.toFloat() / n
+        }
+        val d0 = diff(false); val d1 = diff(true)
+        if (d0 <= 18f) return true
+        if (d1 <= 18f) { cap.swapRB = !cap.swapRB; return true }
+        disableCapture("imagem diferente do print (${d0.toInt()})")
+        return false
+    }
+
+    private fun disableCapture(why: String) {
+        runCatching { CaptureService.instance?.stopCapture() }
+        status("Captura rápida desligada: $why — usando prints")
     }
 
     private fun regionBitmap(img: ArrayImg, x: Int, y: Int, w: Int, h: Int): Bitmap =

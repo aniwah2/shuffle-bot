@@ -41,6 +41,8 @@ class CaptureService : Service() {
     private var thread: HandlerThread? = null
     private val lock = Any()
     private var cache: ArrayImg? = null
+    /** Se a conferência achar vermelho/azul trocados neste celular, corrige na conversão. */
+    @Volatile var swapRB = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -106,7 +108,8 @@ class CaptureService : Service() {
                     val o = y * w
                     for (x in 0 until w) {
                         val c = row[x]                       // bytes R,G,B,A lidos como inteiro 0xAABBGGRR
-                        px[o + x] = (c and 0xFF00FF00.toInt()) or ((c and 0xFF) shl 16) or ((c shr 16) and 0xFF)
+                        px[o + x] = if (swapRB) (c or 0xFF000000.toInt())
+                                    else (c and 0xFF00FF00.toInt()) or ((c and 0xFF) shl 16) or ((c shr 16) and 0xFF)
                     }
                 }
                 val img = ArrayImg(w, h, px)
@@ -117,6 +120,8 @@ class CaptureService : Service() {
             }
         }
     }
+
+    fun stopCapture() { release(); stopSelf() }
 
     private fun release() {
         instance = null
