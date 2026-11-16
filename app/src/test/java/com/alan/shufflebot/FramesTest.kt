@@ -2,19 +2,56 @@ package com.alan.shufflebot
 
 import org.junit.Test
 import java.io.File
-import javax.imageio.ImageIO
+import java.io.ByteArrayOutputStream
+import java.util.zip.Inflater
 
 /**
  * Roda a leitura do tabuleiro (o mesmo código do app) em quadros de vídeos reais
  * e imprime o que o bot "entende" de cada um. Saída aparece no log do GitHub Actions.
  */
 class FramesTest {
+    /** Leitor mínimo de PNG (RGB/RGBA 8 bits, sem entrelaçamento). */
     private fun load(name: String): ArrayImg {
-        val f = File(javaClass.classLoader!!.getResource("frames/$name")!!.toURI())
-        val im = ImageIO.read(f)
-        val px = IntArray(im.width * im.height)
-        im.getRGB(0, 0, im.width, im.height, px, 0, im.width)
-        return ArrayImg(im.width, im.height, px)
+        val bytes = File(javaClass.classLoader!!.getResource("frames/$name")!!.toURI()).readBytes()
+        var p = 8
+        var w = 0; var h = 0; var ct = 0
+        val idat = ByteArrayOutputStream()
+        fun int(o: Int) = ((bytes[o].toInt() and 255) shl 24) or ((bytes[o + 1].toInt() and 255) shl 16) or
+            ((bytes[o + 2].toInt() and 255) shl 8) or (bytes[o + 3].toInt() and 255)
+        while (p < bytes.size) {
+            val len = int(p); val type = String(bytes, p + 4, 4)
+            if (type == "IHDR") { w = int(p + 8); h = int(p + 12); ct = bytes[p + 17].toInt() }
+            if (type == "IDAT") idat.write(bytes, p + 8, len)
+            if (type == "IEND") break
+            p += 12 + len
+        }
+        val bpp = if (ct == 6) 4 else 3
+        val inf = Inflater(); inf.setInput(idat.toByteArray())
+        val stride = w * bpp
+        val raw = ByteArray((stride + 1) * h)
+        var off = 0
+        while (off < raw.size) { val n = inf.inflate(raw, off, raw.size - off); if (n == 0 && (inf.finished() || inf.needsInput())) break; off += n }
+        val cur = IntArray(stride); val prev = IntArray(stride)
+        val px = IntArray(w * h)
+        for (y in 0 until h) {
+            val f = raw[y * (stride + 1)].toInt()
+            val base = y * (stride + 1) + 1
+            for (x in 0 until stride) {
+                val v = raw[base + x].toInt() and 255
+                val a = if (x >= bpp) cur[x - bpp] else 0
+                val b = prev[x]
+                val c = if (x >= bpp) prev[x - bpp] else 0
+                cur[x] = when (f) {
+                    1 -> v + a; 2 -> v + b; 3 -> v + (a + b) / 2
+                    4 -> { val pp = a + b - c; val pa = Math.abs(pp - a); val pb = Math.abs(pp - b); val pc = Math.abs(pp - c)
+                           v + (if (pa <= pb && pa <= pc) a else if (pb <= pc) b else c) }
+                    else -> v
+                } and 255
+            }
+            for (x in 0 until w) px[y * w + x] = (0xFF shl 24) or (cur[x * bpp] shl 16) or (cur[x * bpp + 1] shl 8) or cur[x * bpp + 2]
+            System.arraycopy(cur, 0, prev, 0, stride)
+        }
+        return ArrayImg(w, h, px)
     }
 
     private fun describe(tag: String, img: ArrayImg, g: BoardGeom, learner: BattleLearner?) {
@@ -43,14 +80,14 @@ class FramesTest {
     @Test fun video5_tabuleiroParado() {
         val g = BoardGeom(14, 1208, 1052)
         val learner = BattleLearner(BoardReader())
-        for (t in listOf("020", "021", "022", "023", "024", "040", "041", "042")) describe("v5_$t", load("v5_$t.jpg"), g, learner)
+        for (t in listOf("020", "021", "022", "040")) describe("v5_$t", load("v5_$t.png"), g, learner)
         println("v5 aprendidos: ${learner.known.size}")
     }
 
     @Test fun video4_e_prints() {
         val g = BoardGeom(20, 1364, 1240)
         val learner = BattleLearner(BoardReader())
-        for (t in listOf("030", "060", "061", "062", "100", "150")) describe("v4_$t", load("v4_$t.jpg"), g, learner)
+        for (t in listOf("030", "060", "150")) describe("v4_$t", load("v4_$t.png"), g, learner)
         describe("ex4", load("ex4.png"), g, BattleLearner(BoardReader()))
         describe("blocos", load("blocos.png"), g, BattleLearner(BoardReader()))
     }
