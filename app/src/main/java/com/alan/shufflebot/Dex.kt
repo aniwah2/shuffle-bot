@@ -38,6 +38,10 @@ object Dex {
     private val disr = ArrayList<Pair<String, FloatArray>>()
 
     /** Qual disrupção é essa casa (nuvem, rocha, bloco, metal)? null se não for nenhuma conhecida. */
+    /** Distância média até cada protótipo de disrupção (para testes/diagnóstico). */
+    fun disruptionDists(f: FloatArray): Map<String, Float> = disr.filter { it.second.size == f.size }
+        .associate { (k, v) -> k to (v.indices.sumOf { abs(v[it] - f[it]).toDouble() } / v.size).toFloat() }
+
     fun disruptionKind(f: FloatArray): String? {
         for ((k, v) in disr) {
             if (v.size != f.size) continue

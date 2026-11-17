@@ -200,6 +200,42 @@ class FramesTest {
         }
     }
 
+    private fun nuvemDiag(tag: String, learn: List<String>, boards: List<String>) {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val r = BoardReader(); val l = BattleLearner(r)
+        for (n in learn) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v0 = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            if (l.known.isEmpty()) { if (l.tryLearnDex(v0, f).isEmpty() && l.known.isEmpty()) l.tryLearn(v0, f) }
+        }
+        val team = l.known.mapNotNull { Dex.identify(it)?.baseName }.toHashSet()
+        println("[$tag] time: $team — ${l.lastReason}")
+        for (n in boards) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            val spName = HashMap<Int, String>()
+            for ((sp, look) in r.speciesLook(v, f)) Dex.identify(look)?.let { spName[sp] = it.baseName }
+            val knownFree = BooleanArray(36) { v.movable[it] && (l.isKnown(f[it]) || spName[v.species[it]]?.let { x -> x in team } == true) }
+            val canon = HashMap<Int, Int>(); val first = HashMap<String, Int>()
+            for ((sp, nm) in spName) canon[sp] = first.getOrPut(nm) { sp }
+            val dk = IntArray(36) { if (knownFree[it]) 0 else when (Dex.disruptionKind(f[it])) { "rocha" -> 1; "bloco" -> 2; "nuvem" -> 3; "metal" -> 4; else -> 0 } }
+            val sb = StringBuilder()
+            for (row in 0 until 6) { sb.append("      "); for (c in 0 until 6) { val i = row * 6 + c
+                sb.append(when { knownFree[i] -> String.format("%3d", canon[v.species[i]] ?: v.species[i]); dk[i] == 3 -> "  N"; dk[i] == 4 -> "  M"; dk[i] == 1 -> "  R"; dk[i] == 2 -> "  X"; v.frozen[i] -> "  *"; else -> "  ?" }) }; sb.append('\n') }
+            println("[$tag] $n nomes=${spName.toSortedMap()}\n$sb")
+            for (i in 0 until 36) if (!knownFree[i] && dk[i] == 0)
+                println("[$tag]    ? (${i / 6},${i % 6}) sp=${v.species[i]} ${spName[v.species[i]]} movable=${v.movable[i]} dist=${Dex.disruptionDists(f[i]).mapValues { it.value.toInt() }}")
+            val sp = IntArray(36) { if (knownFree[it]) (canon[v.species[it]] ?: v.species[it]) else -(it + 1) }
+            val mv = Solver.best(sp, 6, emptySet(), BooleanArray(36) { !knownFree[it] }, dkind = dk, explore = BooleanArray(36) { dk[it] == 3 })
+            println("[$tag]   jogada: $mv ${mv?.let { "(${it.from / 6},${it.from % 6})->(${it.to / 6},${it.to % 6})" }}")
+        }
+    }
+
+    @Test fun nuvemNegra_blaziken() {
+        nuvemDiag("blz", listOf("v14a_017", "v14a_019", "v14a_017"), listOf("v14a_063", "v14a_067", "v14a_071"))
+        nuvemDiag("blz2", listOf("v14b_006", "v14b_007", "v14b_006"), listOf("v14b_011", "v14b_014", "v14b_020"))
+    }
+
     @Test fun nuvens_soMexeEmPokemonReconhecido() {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val r = BoardReader()
