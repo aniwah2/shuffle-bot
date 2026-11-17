@@ -1107,8 +1107,19 @@ class BotService : AccessibilityService() {
                 override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
                     val buffer = result.hardwareBuffer
                     val hw = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
-                    out = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                    val sw = hw?.copy(Bitmap.Config.ARGB_8888, false)
                     hw?.recycle()
+                    // Celulares com tela "cores vivas" (Display P3) entregam o print em outro espaço de cor:
+                    // os números das cores mudam (nuvem deixava de parecer nuvem). Converte para sRGB,
+                    // o mesmo da captura rápida e da Dex.
+                    val srgb = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
+                    out = if (sw != null && sw.colorSpace != null && sw.colorSpace != srgb) {
+                        runCatching {
+                            val o = Bitmap.createBitmap(sw.width, sw.height, Bitmap.Config.ARGB_8888, true, srgb)
+                            android.graphics.Canvas(o).drawBitmap(sw, 0f, 0f, null)
+                            sw.recycle(); o
+                        }.getOrElse { sw }
+                    } else sw
                     buffer.close()
                     latch.countDown()
                 }
