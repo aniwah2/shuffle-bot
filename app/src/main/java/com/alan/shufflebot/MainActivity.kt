@@ -78,7 +78,7 @@ class MainActivity : Activity() {
         }
         col.addView(dex)
         val fast = CheckBox(this).apply {
-            text = "Captura rápida da tela (bem mais jogadas por segundo; o Android pede permissão ao iniciar — escolha \"Tela inteira\")"
+            text = "Captura rápida da tela (EXPERIMENTAL, desligada por padrão). O bot começa com prints na hora; se marcar, o Android pede permissão: escolha \"Tela inteira\". Se a janela travar, desmarque."
             isChecked = prefs.fastCapture
         }
         col.addView(fast)

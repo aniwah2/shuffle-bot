@@ -342,24 +342,20 @@ class BotService : AccessibilityService() {
 
     /** Chamado pela tela de permissão de captura: liga o bot (com ou sem captura rápida). */
     fun onCaptureReady(ok: Boolean) {
-        main.postDelayed({
-            if (!ok) status("Sem captura rápida — usando prints (mais lento)")
-            launchWorker()
-        }, if (ok) 600 else 0)
+        if (!ok) status("Sem captura rápida — seguindo com prints")
+        main.postDelayed({ launchWorker() }, if (ok) 600 else 0)
     }
 
     private fun startBot() {
         if (frame != null) toggleCalibration()
         if (teamView != null) toggleTeam()
+        // O bot começa NA HORA com prints. Se a captura rápida estiver marcada, a permissão é pedida em
+        // paralelo e, quando for concedida, o bot passa a usá-la sozinho (sem travar esperando a janela).
+        launchWorker()
         if (Prefs(this).fastCapture && CaptureService.instance == null && !captureAsked) {
             captureAsked = true
-            status("Permita a captura da tela (escolha \"Tela inteira\")")
             CaptureActivity.request(this)
-            // se a janela de permissão travar/ficar sem resposta, joga com prints mesmo assim
-            main.postDelayed({ if (!running) { status("Sem resposta da captura — usando prints"); launchWorker() } }, 10_000)
-            return
         }
-        launchWorker()
     }
 
     private fun launchWorker() {
@@ -417,7 +413,7 @@ class BotService : AccessibilityService() {
     private fun botLoop() {
         val prefs = Prefs(this)
         val reader = BoardReader()
-        if (CaptureService.instance != null) verifyCapture()
+        var capSeen: CaptureService? = null       // captura rápida que já foi conferida com o print
         var lastCapCheck = System.currentTimeMillis()
         var g = geomOrGuess(prefs)            // grade salva ou estimada; só reajusta antes da batalha, se não conseguir ler
         var lastFitTry = 0L
@@ -540,6 +536,7 @@ class BotService : AccessibilityService() {
             if (feats == null) { status("Grade fora da tela — recalibre"); Thread.sleep(1000); continue }
             val border = b0
             val now = System.currentTimeMillis()
+            CaptureService.instance?.let { ci -> if (ci !== capSeen) { capSeen = ci; verifyCapture(); prev = null; lastCapCheck = now } }
 
             // 1) (opcional) esperar as peças assentarem — no máximo 1 print a mais
             val p0 = prev
