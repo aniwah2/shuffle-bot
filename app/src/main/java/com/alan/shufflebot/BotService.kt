@@ -355,12 +355,15 @@ class BotService : AccessibilityService() {
             captureAsked = true
             status("Permita a captura da tela (escolha \"Tela inteira\")")
             CaptureActivity.request(this)
+            // se a janela de permissão travar/ficar sem resposta, joga com prints mesmo assim
+            main.postDelayed({ if (!running) { status("Sem resposta da captura — usando prints"); launchWorker() } }, 10_000)
             return
         }
         launchWorker()
     }
 
     private fun launchWorker() {
+        if (running && worker?.isAlive == true) return
         extraHold = 0; extraMove = 0
         running = true
         startBtn?.text = "⏸ Parar"
@@ -461,6 +464,9 @@ class BotService : AccessibilityService() {
         val waitingSince = System.currentTimeMillis()
 
         var prev: Array<FloatArray>? = null
+        class Pend(val mv: Move, val before: Array<FloatArray>, val at: Long, val megaCells: Int,
+                   val spec: Boolean, val specCell: Int, val specSp: Int)
+        val pending = ArrayList<Pend>()
         var lastMove: Move? = null
         var moveDoneAt = 0L              // quando o último arrasto terminou
         val recent = ArrayDeque<Boolean>()   // últimas jogadas: pegou ou não no jogo
@@ -494,7 +500,7 @@ class BotService : AccessibilityService() {
             // 0b) você tocou na tela: o bot sai do caminho
             if (System.currentTimeMillis() < userPauseUntil) {
                 status("✋ Você tocou na tela — esperando")
-                lastMove = null; beforeMove = null; prev = null
+                lastMove = null; beforeMove = null; prev = null; pending.clear()
                 Thread.sleep(150); continue
             }
 
@@ -614,7 +620,7 @@ class BotService : AccessibilityService() {
                 } else { adopt = null; adoptStreak = 0 }
 
                 if (lostSince == 0L) lostSince = now
-                lastMove = null; beforeMove = null
+                lastMove = null; beforeMove = null; pending.clear()
                 // Fim de batalha = o jogo ESCREVEU isso na tela (CLEAR!, GAME OVER, Catchability…).
                 // Combo grande ou efeito na tela só pausa: o bot não toca em nada enquanto não reconhece o tabuleiro.
                 endWordRef.get()?.let { w -> autoStop("✅ Batalha terminou (li \"$w\"). Toque ▶ na próxima"); return }
@@ -658,37 +664,44 @@ class BotService : AccessibilityService() {
                 adoptName.keys.retainAll(seen)
             }
 
-            // 4) a última jogada pegou no jogo? Espera a REAÇÃO do jogo (tabuleiro mudar), não um tempo fixo:
-            //    o jogo costuma reagir em 0,1–0,2 s; se não mudar em ~0,45 s, a jogada não pegou.
-            val lm = lastMove
-            val bm = beforeMove
-            if (lm != null && bm != null) {
-                val arrived = reader.dist(feats[lm.to], bm[lm.from]) < knownThr
-                val moved = arrived || reader.changedCells(bm, feats, 30f) >= 3
-                val limit = if (lm.toEmpty) 650 else 450
-                if (!moved && now - moveDoneAt < limit) { Thread.sleep(10); continue }
-                recent.addLast(moved); if (recent.size > 6) recent.removeFirst()
-                if (lm.explore) {
-                    if (moved) cloudFails = 0 else cloudFails++
-                    if (lm.from in hidden.indices && !moved) hidden[lm.from] = -1      // palpite errado: esquece
-                    if (lm.to in hidden.indices && !moved) hidden[lm.to] = -1
-                    if (cloudFails >= 4) { cloudOffUntil = now + 2500; cloudFails = 0 }
-                }
-                else if (lm.toEmpty) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
-                val wasSpec = lm === specMove && specCell >= 0
-                if (wasSpec && !moved && specCell < notIt.size) notIt[specCell].add(specSp)   // não era esse: risca da lista
-                specMove = null
-                if (moved) { megaCount += lastMegaCells; failed.clear(); cellFails.fill(0) }
-                else {
-                    if (!wasSpec) failed.add(lm.key)
-                    // vários arrastos seguidos sem pegar (e não eram tentativas incertas): o arrasto está curto demais
-                    if (!lm.toEmpty && recent.size >= 4 && recent.takeLast(4).count { !it } >= 3 && extraHold < 80) {
-                        extraHold += 20; extraMove += 40; recent.clear()
-                        failed.clear(); cellFails.fill(0)
-                        status("Ajustando o arrasto (o jogo não estava aceitando)…")
+            // 4) as jogadas feitas pegaram? O bot NÃO fica esperando: continua jogando em outras partes do
+            //    tabuleiro e confere cada jogada quando o print mostrar a reação (até ~0,45 s).
+            val busy = BooleanArray(total)
+            run {
+                val it = pending.iterator()
+                while (it.hasNext()) {
+                    val pd = it.next(); val lm = pd.mv; val bm = pd.before
+                    val area = HashSet<Int>(lm.cells); area.add(lm.from); area.add(lm.to)
+                    val arrived = lm.to < total && reader.dist(feats[lm.to], bm[lm.from]) < knownThr
+                    val moved = arrived || area.count { i -> i < total && reader.dist(bm[i], feats[i]) > 30f } >= 2
+                    val limit = if (lm.toEmpty || pd.spec) 650 else 450
+                    if (!moved && now - pd.at < limit) {
+                        // ainda esperando a reação: não mexe nessas casas nem no que está acima delas (vai cair)
+                        for (i in area) if (i < total) { var r = i / g.n; val c = i % g.n; while (r >= 0) { busy[r * g.n + c] = true; r-- } }
+                        continue
+                    }
+                    it.remove()
+                    val counts = !lm.explore && !lm.toEmpty && !pd.spec      // só jogadas certas medem o arrasto
+                    if (counts) { recent.addLast(moved); if (recent.size > 6) recent.removeFirst() }
+                    if (lm.explore) {
+                        if (moved) cloudFails = 0 else cloudFails++
+                        if (lm.from in hidden.indices && !moved) hidden[lm.from] = -1      // palpite errado: esquece
+                        if (lm.to in hidden.indices && !moved) hidden[lm.to] = -1
+                        if (cloudFails >= 4) { cloudOffUntil = now + 2500; cloudFails = 0 }
+                    }
+                    else if (lm.toEmpty) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
+                    if (pd.spec && !moved && pd.specCell < notIt.size) notIt[pd.specCell].add(pd.specSp)   // não era esse: risca
+                    if (moved) { megaCount += pd.megaCells; failed.clear(); cellFails.fill(0) }
+                    else {
+                        if (!pd.spec) failed.add(lm.key)
+                        // vários arrastos CERTOS seguidos sem pegar: o arrasto está curto demais
+                        if (counts && recent.size >= 4 && recent.takeLast(4).count { !it } >= 3 && extraHold < 80) {
+                            extraHold += 20; extraMove += 40; recent.clear()
+                            failed.clear(); cellFails.fill(0)
+                            status("Ajustando o arrasto (o jogo não estava aceitando)…")
+                        }
                     }
                 }
-                lastMove = null; beforeMove = null
             }
 
             // 5) escolher e fazer a jogada
@@ -704,7 +717,7 @@ class BotService : AccessibilityService() {
             }
             // Só mexe em casas onde reconhece um Pokémon desta batalha. Nuvem, caixote, bloco, o botão do gravador
             // de tela ou qualquer outra coisa por cima ficam de fora (nem arrasta, nem conta como combinação).
-            val blocked = BooleanArray(total) { !knownFree[it] || !view.movable[it] || cellFails[it] >= 1 || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
+            val blocked = BooleanArray(total) { busy[it] || !knownFree[it] || !view.movable[it] || cellFails[it] >= 1 || isDisruption(feats[it]) || learner.isDisrupt(feats[it]) }
             // Que disrupção é cada casa (pela aparência do jogo): rocha, bloco, nuvem, metal; gelo = moldura clara
             val dkind = IntArray(total)
             val dCount = HashMap<String, Int>()
@@ -776,7 +789,7 @@ class BotService : AccessibilityService() {
             // embaixo (menos os já descartados) e procura a jogada que daria combinação. Peso = quão comum é
             // esse Pokémon no tabuleiro. Se o jogo não aceitar, aquele Pokémon é riscado daquela nuvem.
             var specTxt = ""
-            if (mv == null && exploreCells != null) {
+            if (mv == null && exploreCells != null && pending.isEmpty()) {
                 val freq = HashMap<Int, Int>()
                 for (i in 0 until total) if (knownFree[i] && solverSpecies[i] >= 0) freq[solverSpecies[i]] = (freq[solverSpecies[i]] ?: 0) + 1
                 var bestEv = 0f; var bestMv: Move? = null; var bCell = -1; var bSp = -1
@@ -807,6 +820,7 @@ class BotService : AccessibilityService() {
                 val mb = knownEntry.firstOrNull { it != null && !it.isMega && Dex.megaOf(it) != null }?.baseName
                 if (mb != null) lastMegaCells = mv.cells.count { spName[view.species[it]] == mb }
             }
+            if (mv == null && pending.isNotEmpty()) { Thread.sleep(5); continue }   // esperando a reação das jogadas feitas
             if (mv == null) {
                 status("Sem jogada ($types tipos)")
                 failed.clear(); cellFails.fill(0)
@@ -830,8 +844,11 @@ class BotService : AccessibilityService() {
             status("Jogando$dexTxt • $types tipos$extra$teamTxt • jogada $moves")
             beforeMove = feats
             lastMove = mv
+            val isSpec = mv === specMove
+            specMove = null
             drag(g.center(mv.from), g.center(mv.to), prefs)
             moveDoneAt = System.currentTimeMillis()
+            pending.add(Pend(mv, feats, moveDoneAt, lastMegaCells, isSpec, if (isSpec) specCell else -1, if (isSpec) specSp else -1))
             if (prefs.afterMoveMs > 0) Thread.sleep(prefs.afterMoveMs.toLong())
         }
     }
