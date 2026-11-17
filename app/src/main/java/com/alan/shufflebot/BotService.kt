@@ -671,9 +671,9 @@ class BotService : AccessibilityService() {
                 val it = pending.iterator()
                 while (it.hasNext()) {
                     val pd = it.next(); val lm = pd.mv; val bm = pd.before
-                    val area = HashSet<Int>(lm.cells); area.add(lm.from); area.add(lm.to)
+                    val area = HashSet<Int>(lm.cells.toList()); area.add(lm.from); area.add(lm.to)
                     val arrived = lm.to < total && reader.dist(feats[lm.to], bm[lm.from]) < knownThr
-                    val moved = arrived || area.count { i -> i < total && reader.dist(bm[i], feats[i]) > 30f } >= 2
+                    val moved = arrived || area.count { i: Int -> i < total && reader.dist(bm[i], feats[i]) > 30f } >= 2
                     val limit = if (lm.toEmpty || pd.spec) 650 else 450
                     if (!moved && now - pd.at < limit) {
                         // ainda esperando a reação: não mexe nessas casas nem no que está acima delas (vai cair)
