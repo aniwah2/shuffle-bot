@@ -231,6 +231,18 @@ class FramesTest {
         }
     }
 
+    @Test fun nuvemPelaCor_semFalsoPositivo() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val r = BoardReader()
+        for (fl in File("src/test/resources/frames").listFiles()!!.sortedBy { it.name }) {
+            val img = load(fl.name); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g) ?: continue
+            val nuv = (0 until 36).filter { Dex.looksLikeCloud(f[it]) }
+            val ids = (0 until 36).filter { Dex.identify(f[it]) != null && Dex.looksLikeCloud(f[it]) }
+            println("[cor] ${fl.name}: nuvens=${nuv.size}" + (if (ids.isNotEmpty()) " !!! Pokémon marcado como nuvem: $ids" else ""))
+        }
+    }
+
     @Test fun nuvemNegra_blaziken() {
         nuvemDiag("blz", listOf("v14a_017", "v14a_019", "v14a_017"), listOf("v14a_063", "v14a_067", "v14a_071"))
         nuvemDiag("blz2", listOf("v14b_006", "v14b_007", "v14b_006"), listOf("v14b_011", "v14b_014", "v14b_020"))

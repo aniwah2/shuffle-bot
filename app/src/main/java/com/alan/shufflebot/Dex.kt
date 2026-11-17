@@ -42,7 +42,22 @@ object Dex {
     fun disruptionDists(f: FloatArray): Map<String, Float> = disr.filter { it.second.size == f.size }
         .associate { (k, v) -> k to (v.indices.sumOf { abs(v[it] - f[it]).toDouble() } / v.size).toFloat() }
 
+    /** Nuvem negra pela cor: casa inteira azul-marinho escura e lisa (não depende do protótipo nem do celular). */
+    fun looksLikeCloud(f: FloatArray): Boolean {
+        val nb = f.size / 3
+        if (nb == 0) return false
+        var r = 0f; var g = 0f; var b = 0f
+        for (k in 0 until nb) { r += f[k * 3]; g += f[k * 3 + 1]; b += f[k * 3 + 2] }
+        r /= nb; g /= nb; b /= nb
+        val lum = (r + g + b) / 3f
+        var v = 0f
+        for (k in 0 until nb) { val l = (f[k * 3] + f[k * 3 + 1] + f[k * 3 + 2]) / 3f - lum; v += l * l }
+        val std = kotlin.math.sqrt(v / nb)
+        return lum < 75f && std < 20f && b - r > 12f && b > g
+    }
+
     fun disruptionKind(f: FloatArray): String? {
+        if (looksLikeCloud(f)) return "nuvem"
         // a mais parecida; nuvem negra varia mais (fundo, brilho, compressão da captura): aceita até 25
         var bk: String? = null; var bd = Float.MAX_VALUE
         for ((k, v) in disr) {
