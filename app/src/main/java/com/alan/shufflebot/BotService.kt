@@ -692,11 +692,8 @@ class BotService : AccessibilityService() {
                     else {
                         if (!pd.spec) failed.add(lm.key)
                         // vários arrastos CERTOS seguidos sem pegar: o arrasto está curto demais
-                        if (counts && recent.size >= 4 && recent.takeLast(4).count { !it } >= 3 && extraHold < 80) {
-                            extraHold += 20; extraMove += 40; recent.clear()
-                            failed.clear(); cellFails.fill(0)
-                            status("Ajustando o arrasto (o jogo não estava aceitando)…")
-                        }
+                        // (o ajuste automático do arrasto foi removido: deixava o bot cada vez mais lento;
+                        //  o arrasto é sempre o dos ajustes — mude "Segurar"/"Arrasto" se o jogo não aceitar)
                     }
                 }
             }
@@ -847,6 +844,27 @@ class BotService : AccessibilityService() {
             moveDoneAt = System.currentTimeMillis()
             pending.add(Pend(mv, feats, moveDoneAt, lastMegaCells, isSpec, if (isSpec) specCell else -1, if (isSpec) specSp else -1))
             if (prefs.afterMoveMs > 0) Thread.sleep(prefs.afterMoveMs.toLong())
+
+            // Mais jogadas no MESMO print: o print do Android demora ~0,33 s; enquanto o próximo não vem,
+            // joga em outras partes do tabuleiro que não têm nada a ver com as jogadas já feitas.
+            if (!mv.explore && !mv.toEmpty && !isSpec) {
+                var extraMoves = 0
+                var lastMv: Move = mv
+                while (extraMoves < 2 && running && System.currentTimeMillis() >= userPauseUntil) {
+                    // reserva as casas da jogada anterior, as que ela apaga e tudo acima (vai cair)
+                    val area = HashSet<Int>(lastMv.cells.toList()); area.add(lastMv.from); area.add(lastMv.to)
+                    for (i in area) if (i < total) { var r = i / g.n; val c = i % g.n; while (r >= 0) { blocked[r * g.n + c] = true; r-- } }
+                    val m2 = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
+                        if (useDex) dkind else null, null, null) ?: break
+                    if (m2.explore || m2.toEmpty) break
+                    moves++; extraMoves++
+                    status("Jogando$dexTxt • $types tipos$extra$teamTxt • jogada $moves (mesmo print)")
+                    drag(g.center(m2.from), g.center(m2.to), prefs)
+                    moveDoneAt = System.currentTimeMillis()
+                    pending.add(Pend(m2, feats, moveDoneAt, 0, false, -1, -1))
+                    lastMv = m2
+                }
+            }
         }
     }
 
