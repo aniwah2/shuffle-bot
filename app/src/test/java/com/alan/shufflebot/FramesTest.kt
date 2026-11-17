@@ -243,6 +243,32 @@ class FramesTest {
         }
     }
 
+    @Test fun nuvem_apostaNoQueEstaEmbaixo() {
+        // tabuleiro sem nenhuma jogada visível; nuvem em (2,2) (casa 14). Se embaixo for o 0, soltar/trocar combina.
+        val lab = intArrayOf(
+            0, 1, 2, 3, 0, 1,
+            2, 3, 0, 1, 2, 3,
+            0, 1, -15, 3, 0, 1,
+            2, 3, 0, 1, 2, 3,
+            1, 0, 3, 2, 1, 0,
+            3, 2, 1, 0, 3, 2)
+        val blocked = BooleanArray(36) { it == 14 }
+        val dk = IntArray(36) { if (it == 14) 3 else 0 }
+        val ex = BooleanArray(36) { it == 14 }
+        println("[aposta] sem palpite: ${Solver.best(lab, 6, emptySet(), blocked, dkind = dk, explore = ex)}")
+        val t0 = System.nanoTime()
+        var found = 0
+        repeat(50) {
+            for (c in 0..3) {
+                val l2 = lab.copyOf(); l2[14] = c
+                val b2 = blocked.copyOf(); b2[14] = false
+                val m = Solver.best(l2, 6, emptySet(), b2, dkind = dk, explore = ex, guessed = BooleanArray(36) { it == 14 })
+                if (m != null && it == 0) { println("[aposta] se embaixo for $c: $m"); found++ }
+            }
+        }
+        println("[aposta] achou jogada para $found de 4 palpites; 200 buscas em ${(System.nanoTime() - t0) / 1_000_000} ms")
+    }
+
     @Test fun nuvemNegra_blaziken() {
         nuvemDiag("blz", listOf("v14a_017", "v14a_019", "v14a_017"), listOf("v14a_063", "v14a_067", "v14a_071"))
         nuvemDiag("blz2", listOf("v14b_006", "v14b_007", "v14b_006"), listOf("v14b_011", "v14b_014", "v14b_020"))
