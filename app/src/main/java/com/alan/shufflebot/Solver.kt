@@ -41,6 +41,7 @@ object Solver {
         value: SpeciesValue? = null,
         dkind: IntArray? = null,          // 1 rocha, 2 bloco, 3 nuvem, 4 metal (por casa)
         explore: BooleanArray? = null,    // casas com nuvem onde dá para tentar soltar um Pokémon
+        guessed: BooleanArray? = null,    // casas com nuvem cuja espécie em lab[] é palpite (visto antes da nuvem)
     ): Move? {
         val total = n * n
         val fz = frozen ?: BooleanArray(total)
@@ -58,15 +59,20 @@ object Solver {
                 }
                 if (failed.contains(pairKey(i, j))) continue
                 lab.copyInto(b); fz.copyInto(f)
-                if (toEmpty) { b[j] = lab[i]; b[i] = -5000 - i } else { b[i] = lab[j]; b[j] = lab[i] }
+                // soltar numa nuvem: o que está embaixo vem para a casa de origem (palpite, se houver)
+                if (toEmpty) { b[j] = lab[i]; b[i] = if (toCloud && lab[j] >= 0) lab[j] else -5000 - i } else { b[i] = lab[j]; b[j] = lab[i] }
                 val firstWave = BooleanArray(total)
                 var s = simulate(b, f, n, roles, firstWave, value, dkind)
                 if (s <= 0) continue
-                if (toCloud) s -= 10      // o que está embaixo da nuvem é desconhecido: só se não houver coisa melhor
+                // palpite do que está embaixo de uma nuvem: pode estar errado, então vale um pouco menos
+                val usesGuess = guessed != null && (guessed[i] || (!toEmpty && guessed[j]))
+                if (usesGuess) s -= 6
+                else if (toCloud) s -= 2  // soltar numa nuvem formando trinca com peças visíveis: quase certo
                 else if (toEmpty) s -= 5  // não é certeza que o jogo aceita; prefere trocas normais
                 if (best == null || s > best.score) {
                     val cells = (0 until total).filter { firstWave[it] }.toIntArray()
                     best = if (toEmpty) Move(i, j, s, true, toCloud, cells)
+                    else if (usesGuess) (if (firstWave[j]) Move(i, j, s, false, true, cells) else Move(j, i, s, false, true, cells))
                     else if (firstWave[j]) Move(i, j, s, cells = cells) else Move(j, i, s, cells = cells)
                 }
             }

@@ -43,13 +43,16 @@ object Dex {
         .associate { (k, v) -> k to (v.indices.sumOf { abs(v[it] - f[it]).toDouble() } / v.size).toFloat() }
 
     fun disruptionKind(f: FloatArray): String? {
+        // a mais parecida; nuvem negra varia mais (fundo, brilho, compressão da captura): aceita até 25
+        var bk: String? = null; var bd = Float.MAX_VALUE
         for ((k, v) in disr) {
             if (v.size != f.size) continue
             var s = 0f
             for (j in v.indices) s += abs(v[j] - f[j])
-            if (s / v.size < 12f) return k
+            val d = s / v.size
+            if (d < bd) { bd = d; bk = k }
         }
-        return null
+        return if (bk != null && (bd < 12f || (bk == "nuvem" && bd < 25f))) bk else null
     }
 
     fun load(ctx: Context) {

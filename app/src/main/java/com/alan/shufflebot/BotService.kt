@@ -419,7 +419,9 @@ class BotService : AccessibilityService() {
         var g = geomOrGuess(prefs)            // grade salva ou estimada; só reajusta antes da batalha, se não conseguir ler
         var lastFitTry = 0L
         var emptyMovesOff = false        // se soltar em casa vazia não funcionar no jogo, desliga
-        var cloudOff = false; var cloudFails = 0; var cloudOk = 0   // idem para tentar embaixo de nuvem
+        var cloudOffUntil = 0L; var cloudFails = 0                  // nuvem: pausa curta só se várias seguidas falharem
+        var prevSolver: IntArray? = null                             // espécie de cada casa no print anterior
+        var hidden = IntArray(36) { -1 }                             // palpite do que está embaixo de cada nuvem
         var megaCount = 0                // ícones do Mega já combinados (estimativa)
         var lastGhost = 0L               // última foto de referência do tabuleiro
         var wantGhost = false
@@ -664,7 +666,12 @@ class BotService : AccessibilityService() {
                 val limit = if (lm.toEmpty) 650 else 450
                 if (!moved && now - moveDoneAt < limit) { Thread.sleep(10); continue }
                 recent.addLast(moved); if (recent.size > 6) recent.removeFirst()
-                if (lm.explore) { if (moved) cloudOk++ else cloudFails++; if (cloudFails >= 4 && cloudOk == 0) cloudOff = true }
+                if (lm.explore) {
+                    if (moved) cloudFails = 0 else cloudFails++
+                    if (lm.from in hidden.indices && !moved) hidden[lm.from] = -1      // palpite errado: esquece
+                    if (lm.to in hidden.indices && !moved) hidden[lm.to] = -1
+                    if (cloudFails >= 4) { cloudOffUntil = now + 2500; cloudFails = 0 }
+                }
                 else if (lm.toEmpty) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
                 if (moved) { megaCount += lastMegaCells; failed.clear(); cellFails.fill(0) }
                 else {
@@ -708,7 +715,7 @@ class BotService : AccessibilityService() {
                     dCount["estranho"] = (dCount["estranho"] ?: 0) + 1   // Pokémon que não é do seu time
                 }
             }
-            val exploreCells = if (cloudOff || !useDex) null else BooleanArray(total) { dkind[it] == 3 }
+            val exploreCells = if (now < cloudOffUntil || !useDex) null else BooleanArray(total) { dkind[it] == 3 }
             // o mesmo Pokémon dividido em grupos (nuvem/efeito) vira uma espécie só, para combinar entre si
             val canon = HashMap<Int, Int>(); val firstByName = HashMap<String, Int>()
             for ((sp, n) in spName) { val f0 = firstByName.getOrPut(n) { sp }; canon[sp] = f0 }
@@ -716,6 +723,24 @@ class BotService : AccessibilityService() {
                 val sp = view.species[i]
                 if (sp >= 0 && (knownFree[i] || (view.frozen[i] && sp in knownSpecies))) (canon[sp] ?: sp) else -(i + 1)
             }
+            // Palpite embaixo da nuvem: a nuvem cobre uma peça que o bot acabou de ver → presume que é ela.
+            // Se algo mudar na coluna (peças caíram), o palpite daquela coluna é esquecido.
+            if (hidden.size != total) hidden = IntArray(total) { -1 }
+            val ps = prevSolver
+            if (ps != null && ps.size == total) {
+                for (c in 0 until g.n) {
+                    var colChanged = false
+                    for (r in 0 until g.n) { val i = r * g.n + c
+                        if (dkind[i] != 3 && solverSpecies[i] >= 0 && ps[i] >= 0 && ps[i] != solverSpecies[i]) colChanged = true }
+                    for (r in 0 until g.n) { val i = r * g.n + c
+                        if (dkind[i] != 3) hidden[i] = -1
+                        else if (ps[i] >= 0) hidden[i] = ps[i]          // nuvem acabou de cobrir esta peça
+                        else if (colChanged) hidden[i] = -1 }
+                }
+            }
+            prevSolver = IntArray(total) { if (dkind[it] == 3) -1 else solverSpecies[it] }
+            val guessedCells = if (exploreCells == null) null else BooleanArray(total) { dkind[it] == 3 && hidden[it] >= 0 }
+            if (guessedCells != null) for (i in 0 until total) if (guessedCells[i]) { solverSpecies[i] = hidden[i]; blocked[i] = false }
             val roles = reader.rolesFor(view, feats, team, thr * 1.3f)
             var value: SpeciesValue? = null
             var dexTxt = ""
@@ -740,7 +765,7 @@ class BotService : AccessibilityService() {
                 if (opp != null) dexTxt = " • vs ${opp.name}"
             }
             fun bestMove() = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
-                if (useDex) dkind else null, exploreCells)
+                if (useDex) dkind else null, exploreCells, guessedCells)
             val mv = bestMove()
             lastMegaCells = 0
             if (mv != null && useDex) {
@@ -763,7 +788,7 @@ class BotService : AccessibilityService() {
                     val fz = view.frozen.count { it }
                     if (fz > 0) append(" • $fz no gelo")
                 }
-                if (mv.explore) append(" • tentando na nuvem")
+                if (mv.explore) append(if (guessedCells?.let { it[mv.from] || it[mv.to] } == true) " • palpite na nuvem" else " • soltando na nuvem")
             }
             val teamTxt = if (roles != null && roles.any { it != Role.NORMAL }) " • time ✓" else ""
             status("Jogando$dexTxt • $types tipos$extra$teamTxt • jogada $moves")
