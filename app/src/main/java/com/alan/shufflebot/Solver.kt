@@ -42,10 +42,23 @@ object Solver {
         dkind: IntArray? = null,          // 1 rocha, 2 bloco, 3 nuvem, 4 metal (por casa)
         explore: BooleanArray? = null,    // casas com nuvem onde dá para tentar soltar um Pokémon
         guessed: BooleanArray? = null,    // casas com nuvem cuja espécie em lab[] é palpite (visto antes da nuvem)
-    ): Move? {
+    ): Move? = candidates(lab, n, failed, blocked, frozen, roles, empty, value, dkind, explore, guessed, 1).firstOrNull()?.move
+
+    class Cand(val move: Move, val board: IntArray, val frozen: BooleanArray)
+
+    /**
+     * Todas as jogadas que combinam algo, da melhor para a pior (até [keep]), com o tabuleiro que fica
+     * depois da cascata (casas que caíram do topo ficam "desconhecidas", negativas).
+     */
+    fun candidates(
+        lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray,
+        frozen: BooleanArray?, roles: Array<Role>?, empty: BooleanArray?, value: SpeciesValue?,
+        dkind: IntArray?, explore: BooleanArray?, guessed: BooleanArray?, keep: Int,
+    ): List<Cand> {
         val total = n * n
         val fz = frozen ?: BooleanArray(total)
-        var best: Move? = null
+        val out = ArrayList<Cand>()
+        var worst = Int.MIN_VALUE
         val b = IntArray(total)
         val f = BooleanArray(total)
         for (i in 0 until total) {
@@ -69,15 +82,42 @@ object Solver {
                 if (usesGuess) s -= 6
                 else if (toCloud) s -= 2  // soltar numa nuvem formando trinca com peças visíveis: quase certo
                 else if (toEmpty) s -= 5  // não é certeza que o jogo aceita; prefere trocas normais
-                if (best == null || s > best.score) {
-                    val cells = (0 until total).filter { firstWave[it] }.toIntArray()
-                    best = if (toEmpty) Move(i, j, s, true, toCloud, cells)
+                if (out.size >= keep && s <= worst) continue
+                val cells = (0 until total).filter { firstWave[it] }.toIntArray()
+                val mv = if (toEmpty) Move(i, j, s, true, toCloud, cells)
                     else if (usesGuess) (if (firstWave[j]) Move(i, j, s, false, true, cells) else Move(j, i, s, false, true, cells))
                     else if (firstWave[j]) Move(i, j, s, cells = cells) else Move(j, i, s, cells = cells)
-                }
+                out.add(Cand(mv, b.copyOf(), f.copyOf()))
+                if (out.size > keep * 2) { out.sortByDescending { it.move.score }; while (out.size > keep) out.removeAt(out.size - 1); worst = out.last().move.score }
             }
         }
-        return best
+        out.sortByDescending { it.move.score }
+        while (out.size > keep) out.removeAt(out.size - 1)
+        return out
+    }
+
+    /**
+     * Modo "jogadas limitadas": olha duas jogadas à frente. Para as melhores jogadas de agora, simula o
+     * tabuleiro que sobra e vê a melhor jogada seguinte. Nota = agora + metade da próxima.
+     * Jogadas incertas (nuvem/palpite) não entram no planejamento — só se não houver jogada certa.
+     */
+    fun bestPlanned(
+        lab: IntArray, n: Int, failed: Set<Long>, blocked: BooleanArray,
+        frozen: BooleanArray?, roles: Array<Role>?, empty: BooleanArray?, value: SpeciesValue?,
+        dkind: IntArray?, explore: BooleanArray?, guessed: BooleanArray?, width: Int = 10,
+    ): Move? {
+        val total = n * n
+        val sure = candidates(lab, n, failed, blocked, frozen, roles, empty, value, dkind, null, null, width)
+        if (sure.isEmpty()) return best(lab, n, failed, blocked, frozen, roles, empty, value, dkind, explore, guessed)
+        var bestMv: Move? = null; var bestS = Int.MIN_VALUE
+        for (c in sure) {
+            val b2 = c.board
+            val bl2 = BooleanArray(total) { b2[it] < 0 || (blocked[it] && b2[it] == lab[it] && !c.frozen[it]) }
+            val s2 = candidates(b2, n, emptySet(), bl2, c.frozen, roles, null, value, dkind, null, null, 1).firstOrNull()?.move?.score ?: 0
+            val tot = c.move.score + s2 / 2
+            if (tot > bestS) { bestS = tot; bestMv = c.move.copy(score = tot) }
+        }
+        return bestMv
     }
 
     /** Simula combinações + quedas + combos. Retorna a nota (0 = não combina nada). */

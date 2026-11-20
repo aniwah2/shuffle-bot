@@ -469,7 +469,15 @@ class BotService : AccessibilityService() {
         var beforeMove: Array<FloatArray>? = null
         val failed = HashSet<Long>()
         val cellFails = IntArray(total)
-        var moves = 0
+        var moves = 0                    // arrastos feitos
+        var realMoves = 0                // jogadas que o jogo aceitou
+        // Tipo de fase, lido do contador acima do tabuleiro: "Time Limit 00:57" ou "Moves Left 15"
+        var stageMode = 0                // 0 ainda não sei, 1 tempo, 2 jogadas limitadas
+        val hudRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        var lastHud = 0L; var hudTries = 0
+        var movesLeft = -1; var movesAtDrag = -1
+        var pendingSpec: Pair<Int, Int>? = null
+        var settling = false; var stableFrames = 0; var prevSettle: Array<FloatArray>? = null
         var failStreak = 0
         var lostSince = 0L
         var unstable = 0
@@ -529,6 +537,24 @@ class BotService : AccessibilityService() {
                 val h = (g.size * 0.23f).toInt().coerceIn(1, bmp.height - y0)
                 runCatching { regionBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop ->
                     readOpponent(crop) { e -> if (e != null) opponentRef.set(e) }
+                }
+            }
+            // Contador da fase (tempo ou jogadas): define o modo de jogo; no modo jogadas, lê o número sempre
+            if (known.isNotEmpty() && ((stageMode == 0 && hudTries < 12 && now - lastHud > 1000) || (stageMode == 2 && now - lastHud > 350))) {
+                lastHud = now; if (stageMode == 0) hudTries++
+                val x0 = (g.left - g.size * 0.02f).toInt().coerceIn(0, bmp.width - 1)
+                val y0 = (g.top - g.size * 0.29f).toInt().coerceIn(0, bmp.height - 1)
+                val w = (g.size * 0.36f).toInt().coerceIn(1, bmp.width - x0)
+                val h = (g.size * 0.22f).toInt().coerceIn(1, bmp.height - y0)
+                runCatching { regionBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop -> readText(crop) { t -> hudRef.set(t) } }
+            }
+            hudRef.getAndSet(null)?.let { t ->
+                val up = t.uppercase()
+                val digits = Regex("\\d+").findAll(up.substringAfter("LEFT", up)).map { it.value.toInt() }.toList()
+                if (up.contains(":") || up.contains("TIME") || up.contains("LIMIT")) { if (stageMode != 1) { stageMode = 1; status("Fase de TEMPO: modo rápido") } }
+                else if (up.contains("MOVE") || up.contains("LEFT") || (stageMode == 2 && digits.size == 1)) {
+                    if (stageMode != 2) { stageMode = 2; status("Fase de JOGADAS: modo estratégico") }
+                    digits.lastOrNull { it in 0..99 }?.let { movesLeft = it }
                 }
             }
             if (wantGhost) { saveGhost(bmp, g); wantGhost = false }
@@ -617,7 +643,7 @@ class BotService : AccessibilityService() {
                 } else { adopt = null; adoptStreak = 0 }
 
                 if (lostSince == 0L) lostSince = now
-                lastMove = null; beforeMove = null; pending.clear()
+                if (stageMode != 2) { lastMove = null; beforeMove = null }; pending.clear()
                 // Fim de batalha = o jogo ESCREVEU isso na tela (CLEAR!, GAME OVER, Catchability…).
                 // Combo grande ou efeito na tela só pausa: o bot não toca em nada enquanto não reconhece o tabuleiro.
                 endWordRef.get()?.let { w -> autoStop("✅ Batalha terminou (li \"$w\"). Toque ▶ na próxima"); return }
@@ -632,7 +658,7 @@ class BotService : AccessibilityService() {
                 if (moves > 0 && now - lostSince > 60_000) {
                     autoStop("⏹ Parado: 1 min sem ver o tabuleiro"); return
                 }
-                status("⏸ Tabuleiro sumiu ($recognized/$needed) — animação?")
+                status("⏳ Animação do jogo — esperando o tabuleiro voltar ($recognized/$needed)")
                 continue
             }
             lostSince = 0L
@@ -688,7 +714,7 @@ class BotService : AccessibilityService() {
                     }
                     else if (lm.toEmpty) { if (moved) emptyOk++ else emptyFails++; if (emptyFails >= 3 && emptyOk == 0) emptyMovesOff = true }
                     if (pd.spec && !moved && pd.specCell < notIt.size) notIt[pd.specCell].add(pd.specSp)   // não era esse: risca
-                    if (moved) { megaCount += pd.megaCells; failed.clear(); cellFails.fill(0) }
+                    if (moved) { realMoves++; megaCount += pd.megaCells; failed.clear(); cellFails.fill(0) }
                     else {
                         if (!pd.spec) failed.add(lm.key)
                         // vários arrastos CERTOS seguidos sem pegar: o arrasto está curto demais
@@ -776,7 +802,29 @@ class BotService : AccessibilityService() {
                 }
                 if (opp != null) dexTxt = " • vs ${opp.name}"
             }
-            fun bestMove() = Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
+            // MODO JOGADAS: uma jogada por vez. Depois de arrastar, espera a cascata terminar (tabuleiro
+            // parado em 2 prints seguidos) e confere pelo contador se o jogo aceitou a jogada.
+            if (stageMode == 2 && settling) {
+                val ch = prevSettle?.let { reader.changedCells(it, feats, 18f) } ?: 99
+                prevSettle = feats
+                stableFrames = if (ch == 0) stableFrames + 1 else 0
+                if (now - moveDoneAt < 600 || stableFrames < 2) { status("⏳ Esperando a cascata terminar…"); continue }
+                settling = false
+                val lm = lastMove; val bm = beforeMove
+                val accepted = (movesLeft in 0 until movesAtDrag) ||
+                    (lm != null && bm != null && reader.changedCells(bm, feats, 30f) >= 3)
+                if (accepted) { realMoves++; failed.clear(); cellFails.fill(0) }
+                else if (lm != null) {
+                    val ps = pendingSpec
+                    if (ps != null && ps.first < notIt.size) notIt[ps.first].add(ps.second) else { failed.add(lm.key); cellFails[lm.from]++; cellFails[lm.to]++ }
+                }
+                pendingSpec = null
+                lastMove = null; beforeMove = null
+            }
+            fun bestMove() = if (stageMode == 2)
+                Solver.bestPlanned(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
+                    if (useDex) dkind else null, exploreCells, guessedCells)
+            else Solver.best(solverSpecies, g.n, failed, blocked, view.frozen, roles, emptyCells, value,
                 if (useDex) dkind else null, exploreCells, guessedCells)
             var mv = bestMove()
             // Nenhuma jogada certa: usa as peças ESCONDIDAS. Para cada nuvem, imagina cada Pokémon que pode estar
@@ -835,19 +883,25 @@ class BotService : AccessibilityService() {
                 else if (mv.explore) append(if (guessedCells?.let { it[mv.from] || it[mv.to] } == true) " • palpite na nuvem" else " • soltando na nuvem")
             }
             val teamTxt = if (roles != null && roles.any { it != Role.NORMAL }) " • time ✓" else ""
-            status("Jogando$dexTxt • $types tipos$extra$teamTxt • jogada $moves")
+            val modeTxt = when (stageMode) { 2 -> " • JOGADAS" + (if (movesLeft >= 0) " ($movesLeft restantes)" else ""); 1 -> " • tempo"; else -> "" }
+            status("Jogando$modeTxt$dexTxt • $types tipos$extra$teamTxt • jogada ${realMoves + 1}")
             beforeMove = feats
             lastMove = mv
             val isSpec = mv === specMove
             specMove = null
             drag(g.center(mv.from), g.center(mv.to), prefs)
             moveDoneAt = System.currentTimeMillis()
+            if (stageMode == 2) {
+                settling = true; stableFrames = 0; prevSettle = null; movesAtDrag = movesLeft
+                if (isSpec && specCell < notIt.size) pendingSpec = Pair(specCell, specSp) else pendingSpec = null
+                continue
+            }
             pending.add(Pend(mv, feats, moveDoneAt, lastMegaCells, isSpec, if (isSpec) specCell else -1, if (isSpec) specSp else -1))
             if (prefs.afterMoveMs > 0) Thread.sleep(prefs.afterMoveMs.toLong())
 
             // Mais jogadas no MESMO print: o print do Android demora ~0,33 s; enquanto o próximo não vem,
             // joga em outras partes do tabuleiro que não têm nada a ver com as jogadas já feitas.
-            if (!mv.explore && !mv.toEmpty && !isSpec) {
+            if (stageMode != 2 && !mv.explore && !mv.toEmpty && !isSpec) {
                 var extraMoves = 0
                 var lastMv: Move = mv
                 while (extraMoves < 2 && running && System.currentTimeMillis() >= userPauseUntil) {
@@ -858,7 +912,7 @@ class BotService : AccessibilityService() {
                         if (useDex) dkind else null, null, null) ?: break
                     if (m2.explore || m2.toEmpty) break
                     moves++; extraMoves++
-                    status("Jogando$dexTxt • $types tipos$extra$teamTxt • jogada $moves (mesmo print)")
+                    status("Jogando$modeTxt$dexTxt • $types tipos$extra$teamTxt • jogada ${realMoves + 1} (+${extraMoves} no mesmo print)")
                     drag(g.center(m2.from), g.center(m2.to), prefs)
                     moveDoneAt = System.currentTimeMillis()
                     pending.add(Pend(m2, feats, moveDoneAt, 0, false, -1, -1))
@@ -985,6 +1039,15 @@ class BotService : AccessibilityService() {
                     }
                     crop.recycle(); onResult(found)
                 }
+                .addOnFailureListener { crop.recycle(); onResult(null) }
+        } catch (e: Exception) { crop.recycle(); onResult(null) }
+    }
+
+    /** Lê todo o texto de um recorte (contador de tempo/jogadas). */
+    private fun readText(crop: Bitmap, onResult: (String?) -> Unit) {
+        try {
+            recognizer.process(InputImage.fromBitmap(crop, 0))
+                .addOnSuccessListener { t -> crop.recycle(); onResult(t.text) }
                 .addOnFailureListener { crop.recycle(); onResult(null) }
         } catch (e: Exception) { crop.recycle(); onResult(null) }
     }

@@ -243,6 +243,29 @@ class FramesTest {
         }
     }
 
+    @Test fun planejador_duasJogadas() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val r = BoardReader(); val l = BattleLearner(r)
+        for (n in listOf("v13_023", "v13_025", "v13_023")) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v0 = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            if (l.known.isEmpty()) l.tryLearnDex(v0, f)
+        }
+        for (n in listOf("v13_041", "v13_055", "v13_069")) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            val knownFree = BooleanArray(36) { v.movable[it] && l.isKnown(f[it]) }
+            val sp = IntArray(36) { if (knownFree[it]) v.species[it] else -(it + 1) }
+            val bl = BooleanArray(36) { !knownFree[it] }
+            val t0 = System.nanoTime()
+            val m1 = Solver.best(sp, 6, emptySet(), bl, v.frozen)
+            val t1 = System.nanoTime()
+            val m2 = Solver.bestPlanned(sp, 6, emptySet(), bl, v.frozen, null, null, null, null, null, null)
+            val t2 = System.nanoTime()
+            println("[plano] $n: simples=$m1 (${(t1 - t0) / 1000} µs) | planejado=$m2 (${(t2 - t1) / 1000} µs)")
+        }
+    }
+
     @Test fun nuvem_apostaNoQueEstaEmbaixo() {
         // tabuleiro sem nenhuma jogada visível; nuvem em (2,2) (casa 14). Se embaixo for o 0, soltar/trocar combina.
         val lab = intArrayOf(
