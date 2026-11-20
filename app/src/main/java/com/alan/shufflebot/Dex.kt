@@ -165,8 +165,9 @@ object Dex {
             sb.append("\n")
         }
         fun power(e: DexEntry): Float {
+            // ataque manda; habilidade de dano dá um bônus pequeno (limitado: Counterattack e cia dependem de condição)
             var w = e.ap.toFloat()
-            if (e.func.contains("Dano")) w *= 1f + (e.rates[0] * 0.6f + e.rates[1] * 0.3f + e.rates[2] * 0.1f) * (e.mult - 1f).coerceAtLeast(0f)
+            if (e.func.contains("Dano")) w *= 1f + (e.rates[0] * (e.mult - 1f).coerceAtLeast(0f)).coerceAtMost(0.35f)
             if (e.isMega) w *= 1.25f
             return w
         }
