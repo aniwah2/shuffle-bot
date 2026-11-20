@@ -425,6 +425,7 @@ class BotService : AccessibilityService() {
         worker = null
         main.post { startBtn?.text = "▶ Iniciar" }
         status("Parado")
+        recommendation(null)
     }
 
     // ---------------------------------------------------------------- loop principal
@@ -524,7 +525,7 @@ class BotService : AccessibilityService() {
         var stageMode = 0                // 0 ainda não sei, 1 tempo, 2 jogadas limitadas
         val hudRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
         var lastHud = 0L; var hudTries = 0
-        var lastInfoOcr = 0L; var recShownFor: String? = null
+        var lastInfoOcr = 0L; var recShownFor: String? = null; var infoMiss = 0
         recommendation(null)
         val infoRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
         var movesLeft = -1; var movesAtDrag = -1
@@ -642,12 +643,15 @@ class BotService : AccessibilityService() {
                     if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }
                     // Tela de informação da fase (antes de apertar Start): lê o nome do inimigo e "Moves/Time"
                     // para mostrar a recomendação de time ANTES da batalha começar.
-                    if (useDex && now - lastInfoOcr > 2500) {
+                    // (a cada 1 s, usando o MESMO print do laço — sem print extra)
+                    if (useDex && now - lastInfoOcr > 1000) {
                         lastInfoOcr = now
-                        screenshotRetry(1)?.let { shot ->
-                            val small = runCatching { Bitmap.createScaledBitmap(shot, shot.width / 2, shot.height / 2, true) }.getOrNull()
-                            shot.recycle()
-                            if (small != null) readText(small) { t -> infoRef.set(t) }
+                        runCatching {
+                            val h = bmp.height * 2 / 3    // metade de cima da tela, onde fica o nome da fase/inimigo
+                            val crop = regionBitmap(bmp, 0, 0, bmp.width, h)
+                            val small = Bitmap.createScaledBitmap(crop, crop.width / 2, crop.height / 2, true)
+                            crop.recycle()
+                            readText(small) { t -> infoRef.set(t ?: "") }
                         }
                     }
                     infoRef.getAndSet(null)?.let { t ->
@@ -658,7 +662,13 @@ class BotService : AccessibilityService() {
                             val e = Dex.findByText(line.trim()) ?: continue
                             if (found == null || e.name.length > found!!.name.length) found = e
                         }
-                        if (found != null && opponentRef.get() == null) opponentRef.set(found)
+                        if (found != null) {
+                            infoMiss = 0
+                            if (opponentRef.get()?.name != found.name) { opponentRef.set(found); status("👁 Inimigo lido na tela: ${found.name}") }
+                        } else if (opponentRef.get() != null && ++infoMiss >= 3) {
+                            // saiu da tela da fase (nome sumiu por 3 leituras): limpa a recomendação
+                            infoMiss = 0; opponentRef.set(null); recShownFor = null; recommendation(null)
+                        }
                     }
                     opponentRef.get()?.let { opp -> if (recShownFor != opp.name + ":0") { recShownFor = opp.name + ":0"; recommendation(Dex.recommend(opp, emptyList())) } }
                     // esperando há um tempo com captura rápida: confere de novo se a imagem dela está certa
@@ -666,8 +676,11 @@ class BotService : AccessibilityService() {
                         lastCapCheck = now; verifyCapture(); prev = null; continue
                     }
                     // parece tabuleiro mas não dá pra ler direito: a grade pode estar imprecisa → ajusta (só aceita se melhorar)
+                    // Só vale tentar se a tela PARECE um tabuleiro de verdade: a Dex reconhece pelo menos 4 casas
+                    // (tela de informação da fase, menu e loja não passam — antes ficava "Ajustando a grade" sem parar)
                     val p = reader.boardProblem(view)
-                    if (p != null && !p.startsWith("quase tudo liso") && now - lastFitTry > 3000) {
+                    val dexHits = if (useDex) (0 until total).count { view.species[it] >= 0 && Dex.identify(feats[it]) != null } else 4
+                    if (p != null && !p.startsWith("quase tudo liso") && dexHits >= 4 && now - lastFitTry > 10_000) {
                         if (boardishSince == 0L) boardishSince = now
                         if (now - boardishSince > 1500) {
                             lastFitTry = now
