@@ -138,6 +138,28 @@ object Dex {
         return null
     }
 
+    /** Distância média entre uma casa e o ícone de [e] na Dex. */
+    fun distTo(e: DexEntry, look: FloatArray): Float {
+        if (!ready || look.size != dim || e.index < 0) return Float.MAX_VALUE
+        var s = 0f; val off = e.index * dim
+        for (j in 0 until dim) s += abs(look[j] - (feats[off + j].toInt() and 0xFF))
+        return s / dim
+    }
+
+    /**
+     * Identificação no MEIO da batalha: o que aparece de novo quase sempre é o Mega de alguém do time
+     * (o ícone muda quando evolui). Confere primeiro os Megas do time, com tolerância maior; só depois a Dex toda.
+     */
+    fun identifyInBattle(look: FloatArray, team: Collection<DexEntry>): DexEntry? {
+        var best: DexEntry? = null; var bd = 42f
+        for (t in team) {
+            val m = (if (t.isMega) t else megaOf(t)) ?: continue
+            val d = distTo(m, look)
+            if (d < bd) { bd = d; best = m }
+        }
+        return best ?: identify(look)
+    }
+
     /** Procura um nome lido na tela (OCR) na base. */
     fun findByText(text: String): DexEntry? {
         if (!ready) return null
@@ -213,10 +235,12 @@ class SpeciesValue(n: Int) {
             for (sp in entries.indices) {
                 val e = entries[sp] ?: continue
                 val tm = if (opponent != null) Dex.typeMult(e.type, opponent.type) else 1f
-                var w = (e.ap / 115f) * tm
+                // peso = dano: ataque × tipo (×2 / ×½ contra o inimigo). Elevado ao quadrado no tipo para
+                // que um Pokémon ×½ quase nunca seja escolhido se houver um ×2 para combinar.
+                var w = (e.ap / 115f) * tm * tm
                 val mega = Dex.megaOf(e)
                 if (e.isMega) {
-                    w *= 1.3f
+                    w *= 1.6f
                     // Mega que apaga rochas/blocos (ex.: Mega Aerodactyl): cada combinação dele limpa o caminho
                     if (e.megaRemoves && breakable > 0) for (k in 0..2) v.flat[sp][k] += 12f * minOf(breakable, 10) / 2f
                 } else if (!megaEvolved && mega != null) {

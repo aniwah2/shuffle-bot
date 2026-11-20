@@ -196,10 +196,41 @@ class BotService : AccessibilityService() {
         }
 
         wm.addView(root, p)
+        root.viewTreeObserver.addOnGlobalLayoutListener { updatePanelRect() }
         panel = root; panelParams = p; statusText = status; recBox = rec; startBtn = start; calibBtn = calib
     }
 
     private fun status(msg: String) = main.post { statusText?.text = msg }
+
+    /** Onde o painel está na tela (para apagá-lo dos prints antes de ler texto). */
+    @Volatile private var panelRect = android.graphics.Rect()
+    private fun updatePanelRect() {
+        val v = panel ?: return
+        val xy = IntArray(2); v.getLocationOnScreen(xy)
+        panelRect = android.graphics.Rect(xy[0], xy[1], xy[0] + v.width, xy[1] + v.height)
+    }
+
+    /** Pinta o painel de preto num recorte da tela (x0,y0 = canto do recorte; scale = redução). */
+    private fun maskPanel(bmp: Bitmap, x0: Int, y0: Int, scale: Float = 1f): Bitmap {
+        val r = panelRect
+        if (r.isEmpty) return bmp
+        val out = if (bmp.isMutable) bmp else bmp.copy(Bitmap.Config.ARGB_8888, true).also { bmp.recycle() }
+        Canvas(out).drawRect((r.left - x0) * scale, (r.top - y0) * scale, (r.right - x0) * scale, (r.bottom - y0) * scale,
+            Paint().apply { color = Color.BLACK })
+        return out
+    }
+
+    /** Se o painel estiver em cima do tabuleiro, sobe ele para logo acima do tabuleiro. */
+    private fun keepPanelOffBoard(g: BoardGeom) = main.post {
+        val v = panel ?: return@post; val p = panelParams ?: return@post
+        updatePanelRect()
+        val r = panelRect
+        if (r.bottom <= g.top || r.top >= g.top + g.size) return@post
+        val newTop = (g.top - v.height - dp(6)).coerceAtLeast(0)
+        p.y += newTop - r.top
+        runCatching { wm.updateViewLayout(v, p) }
+        v.post { updatePanelRect() }
+    }
 
     /** Mostra a recomendação no painel com os ícones dos Pokémon. */
     private fun recommendation(r: Dex.Recommendation?) = main.post {
@@ -589,7 +620,7 @@ class BotService : AccessibilityService() {
                 val w = (bmp.width - x0).coerceAtLeast(1)
                 val h = (g.size * 0.23f).toInt().coerceIn(1, bmp.height - y0)
                 runCatching { regionBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop ->
-                    readOpponent(crop) { e -> if (e != null) opponentRef.set(e) }
+                    readOpponent(maskPanel(crop, x0, y0)) { e -> if (e != null) opponentRef.set(e) }
                 }
             }
             // Contador da fase (tempo ou jogadas): define o modo de jogo; no modo jogadas, lê o número sempre
@@ -600,7 +631,7 @@ class BotService : AccessibilityService() {
                 val y0 = (g.top - g.size * 0.29f).toInt().coerceIn(0, bmp.height - 1)
                 val w = (g.size * 0.36f).toInt().coerceIn(1, bmp.width - x0)
                 val h = (g.size * 0.22f).toInt().coerceIn(1, bmp.height - y0)
-                runCatching { regionBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop -> readText(crop) { t -> hudRef.set(t) } }
+                runCatching { regionBitmap(bmp, x0, y0, w, h) }.getOrNull()?.let { crop -> readText(maskPanel(crop, x0, y0)) { t -> hudRef.set(t) } }
             }
             hudRef.getAndSet(null)?.let { t ->
                 val up = t.uppercase()
@@ -651,7 +682,7 @@ class BotService : AccessibilityService() {
                             val crop = regionBitmap(bmp, 0, 0, bmp.width, h)
                             val small = Bitmap.createScaledBitmap(crop, crop.width / 2, crop.height / 2, true)
                             crop.recycle()
-                            readText(small) { t -> infoRef.set(t ?: "") }
+                            readText(maskPanel(small, 0, 0, 0.5f)) { t -> infoRef.set(t ?: "") }
                         }
                     }
                     infoRef.getAndSet(null)?.let { t ->
@@ -724,7 +755,7 @@ class BotService : AccessibilityService() {
                     adopt = newLooks
                     if (adoptStreak >= 1) {
                         known.addAll(newLooks)
-                        for (l in newLooks) knownEntry.add(if (useDex) Dex.identify(l) else null)
+                        for (l in newLooks) knownEntry.add(if (useDex) Dex.identifyInBattle(l, knownEntry.filterNotNull()) else null)
                         adopt = null; adoptStreak = 0; continue
                     }
                 } else { adopt = null; adoptStreak = 0 }
@@ -754,7 +785,7 @@ class BotService : AccessibilityService() {
             if (recognized >= needed + 6 && now - lastGhost > 20_000) { lastGhost = now; wantGhost = true }
             // Pokémon novos que apareçam no meio da batalha (disruptions) entram na lista
             if (known.size < 12) for (l in freeLooks(view, feats, 3)) if (!isKnown(l)) {
-                known.add(l); knownEntry.add(if (useDex) Dex.identify(l) else null)
+                known.add(l); knownEntry.add(if (useDex) Dex.identifyInBattle(l, knownEntry.filterNotNull()) else null)
             }
             // Pokémon que a Dex reconhece no tabuleiro (2+ casas) mas que ainda não estão no time do bot
             // (ex.: Roselia que começou com poucas peças): visto em 2 prints seguidos → passa a poder mexer.
@@ -764,8 +795,9 @@ class BotService : AccessibilityService() {
                     cnt[view.species[i]] = (cnt[view.species[i]] ?: 0) + 1
                 val seen = HashSet<String>()
                 for ((sp, look) in reader.speciesLook(view, feats)) {
-                    val e = Dex.identify(look) ?: continue
-                    if (e.baseName in teamNames || (cnt[sp] ?: 0) < 2 || learner.isDisrupt(look)) continue
+                    val e = Dex.identifyInBattle(look, knownEntry.filterNotNull()) ?: continue
+                    if (learner.isKnown(look) || (cnt[sp] ?: 0) < 2 || learner.isDisrupt(look)) continue
+                    if (!e.isMega && e.baseName in teamNames) continue
                     seen.add(e.baseName)
                     val c = (adoptName[e.baseName] ?: 0) + 1
                     adoptName[e.baseName] = c
@@ -888,11 +920,8 @@ class BotService : AccessibilityService() {
                     dexTxt += if (megaEvolved) " • Mega ✓" else " • Mega ${minOf(megaCount, megaNeed)}/$megaNeed"
                 }
                 if (opp != null) dexTxt = " • vs ${opp.name}"
-                val recKey = if (opp != null) opp.name + ":" + knownEntry.count { it != null } else null
-                if (opp != null && recKey != recShownFor) {
-                    recShownFor = recKey
-                    recommendation(Dex.recommend(opp, knownEntry.filterNotNull(), disruptions))
-                }
+                // Na batalha a recomendação some: o painel fica pequeno e não cobre o tabuleiro
+                if (recShownFor != "batalha") { recShownFor = "batalha"; recommendation(null); keepPanelOffBoard(g) }
             }
             // MODO JOGADAS: uma jogada por vez. Depois de arrastar, espera a cascata terminar (tabuleiro
             // parado em 2 prints seguidos) e confere pelo contador se o jogo aceitou a jogada.

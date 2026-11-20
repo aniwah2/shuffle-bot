@@ -243,6 +243,24 @@ class FramesTest {
         }
     }
 
+    @Test fun dano_preferePokemonSuperEfetivo() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val vap = Dex.findByText("Vaporeon")!!; val amp = Dex.findByText("Mega Ampharos")!!
+        val zap = Dex.findByText("Zapdos")!!; val opp = Dex.findByText("Blastoise")!!
+        val v = SpeciesValue.from(arrayOf(vap, amp, zap), opp, emptyMap(), true)
+        println("[dano] pesos Vaporeon=${v.weight[0]} MegaAmpharos=${v.weight[1]} Zapdos=${v.weight[2]}")
+        // linha 0: Vaporeon pode fazer 4 (com cascata); linha 5: Mega Ampharos só 3
+        val lab = intArrayOf(
+            0, 0, 2, 0, 2, 2,
+            2, 1, 0, 2, 1, 0,
+            1, 2, 1, 0, 2, 1,
+            2, 0, 2, 1, 0, 2,
+            0, 2, 0, 2, 1, 0,
+            1, 1, 2, 1, 0, 2)
+        val m = Solver.best(lab, 6, emptySet(), BooleanArray(36), value = v)
+        println("[dano] escolhida: $m espécie=${m?.cells?.firstOrNull()?.let { lab[it] }}")
+    }
+
     @Test fun recomendacao() {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         for (n in listOf("Nidoking", "Rowlet", "Volcanion", "Blaziken", "Xerneas")) {

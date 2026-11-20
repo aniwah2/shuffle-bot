@@ -152,8 +152,11 @@ object Solver {
                             for (t in 0 until len) matched[if (dir == 0) line * n + k + t else (k + t) * n + line] = true
                             val useDex = role == Role.NORMAL && value != null && sp < value.weight.size
                             val bb = if (useDex) value!!.bigBonus[sp] else role.bigBonus
-                            if (len == 4) waveScore += 15f * bb
-                            if (len >= 5) waveScore += 40f * bb
+                            // dano: TUDO é multiplicado pelo peso do Pokémon (ataque × tipo contra o inimigo × Mega).
+                            // Antes o bônus de 4/5 e de combo era igual para todos e um Pokémon ×½ ganhava de um ×2.
+                            val w = if (useDex) value!!.weight[sp] else role.weight
+                            if (len == 4) waveScore += 15f * bb * w
+                            if (len >= 5) waveScore += 40f * bb * w
                             if (useDex) {
                                 val ki = minOf(len, 5) - 3
                                 waveScore += (value!!.dmgFactor[sp][ki] - 1f) * 10f * len * value.weight[sp] + value.flat[sp][ki]
@@ -181,7 +184,7 @@ object Solver {
                 }
             }
             // combos depois da primeira onda: valem um pouco menos (incerteza), mas cada combo ganha bônus
-            score += if (wave == 0) waveScore else waveScore * 0.8f + 12f
+            score += if (wave == 0) waveScore else waveScore * 0.8f + 3f
 
             // limpa e aplica gravidade: congelados ficam parados, o resto cai; o topo vira "desconhecido"
             for (p in matched.indices) if (matched[p]) { b[p] = Int.MIN_VALUE; f[p] = false }
