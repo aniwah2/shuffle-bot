@@ -1165,6 +1165,7 @@ class BotService : AccessibilityService() {
     /** Para o bot por conta própria e deixa o motivo no painel. */
     private fun autoStop(msg: String) {
         running = false
+        recommendation(null)
         main.post {
             worker = null
             startBtn?.text = "▶ Iniciar"
