@@ -246,7 +246,7 @@ class FramesTest {
     @Test fun casasVazias_fase188() {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val r = BoardReader(); val l = BattleLearner(r)
-        for (n in listOf("v24_120", "v24_150", "v24_120", "v24_150")) {
+        for (n in listOf("v24_030", "v24_032", "v24_030", "v24_120", "v24_150")) {
             val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
             val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
             if (l.known.isEmpty()) l.tryLearnDex(v, f)
