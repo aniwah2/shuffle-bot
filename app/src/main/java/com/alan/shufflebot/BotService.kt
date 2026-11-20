@@ -540,8 +540,9 @@ class BotService : AccessibilityService() {
                 }
             }
             // Contador da fase (tempo ou jogadas): define o modo de jogo; no modo jogadas, lê o número sempre
-            if (known.isNotEmpty() && ((stageMode == 0 && hudTries < 12 && now - lastHud > 1000) || (stageMode == 2 && now - lastHud > 350))) {
-                lastHud = now; if (stageMode == 0) hudTries++
+            val tHud = System.currentTimeMillis()
+            if (known.isNotEmpty() && ((stageMode == 0 && hudTries < 12 && tHud - lastHud > 1000) || (stageMode == 2 && tHud - lastHud > 350))) {
+                lastHud = tHud; if (stageMode == 0) hudTries++
                 val x0 = (g.left - g.size * 0.02f).toInt().coerceIn(0, bmp.width - 1)
                 val y0 = (g.top - g.size * 0.29f).toInt().coerceIn(0, bmp.height - 1)
                 val w = (g.size * 0.36f).toInt().coerceIn(1, bmp.width - x0)
