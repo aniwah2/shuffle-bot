@@ -243,6 +243,15 @@ class FramesTest {
         }
     }
 
+    @Test fun recomendacao() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        for (n in listOf("Nidoking", "Rowlet", "Volcanion", "Blaziken", "Xerneas")) {
+            val opp = Dex.findByText(n) ?: continue
+            val team = listOfNotNull(Dex.findByText("Charizard"), Dex.findByText("Pikachu"), Dex.findByText("Swampert"))
+            println("[rec] " + Dex.recommend(opp, team).replace("\n", " | "))
+        }
+    }
+
     @Test fun planejador_duasJogadas() {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val r = BoardReader(); val l = BattleLearner(r)

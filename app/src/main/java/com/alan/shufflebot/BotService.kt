@@ -47,6 +47,7 @@ class BotService : AccessibilityService() {
     private var panel: LinearLayout? = null
     private var panelParams: WindowManager.LayoutParams? = null
     private var statusText: TextView? = null
+    private var recText: TextView? = null
     private var startBtn: Button? = null
     private var calibBtn: Button? = null
     private var teamBtn: Button? = null
@@ -142,6 +143,11 @@ class BotService : AccessibilityService() {
             text = "Parado"
             setTextColor(Color.rgb(180, 220, 255)); textSize = 11f
         }
+        val rec = TextView(this).apply {
+            text = ""; visibility = View.GONE
+            setTextColor(Color.rgb(255, 230, 150)); textSize = 10f
+            maxWidth = (resources.displayMetrics.widthPixels * 0.9f).toInt()
+        }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val start = smallButton("▶ Iniciar") { if (running) stopBot() else startBot() }
         val calib = smallButton("Calibrar") { toggleCalibration() }
@@ -152,7 +158,7 @@ class BotService : AccessibilityService() {
         row.addView(team)
         row.addView(debug)
         teamBtn = team
-        root.addView(handle); root.addView(status); root.addView(row)
+        root.addView(handle); root.addView(status); root.addView(rec); root.addView(row)
 
         val p = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT)
             .apply {
@@ -182,10 +188,13 @@ class BotService : AccessibilityService() {
         }
 
         wm.addView(root, p)
-        panel = root; panelParams = p; statusText = status; startBtn = start; calibBtn = calib
+        panel = root; panelParams = p; statusText = status; recText = rec; startBtn = start; calibBtn = calib
     }
 
     private fun status(msg: String) = main.post { statusText?.text = msg }
+    private fun recommendation(msg: String?) = main.post {
+        recText?.text = msg ?: ""; recText?.visibility = if (msg.isNullOrEmpty()) View.GONE else View.VISIBLE
+    }
 
     // ---------------------------------------------------------------- calibração
 
@@ -475,6 +484,9 @@ class BotService : AccessibilityService() {
         var stageMode = 0                // 0 ainda não sei, 1 tempo, 2 jogadas limitadas
         val hudRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
         var lastHud = 0L; var hudTries = 0
+        var lastInfoOcr = 0L; var recShownFor: String? = null
+        recommendation(null)
+        val infoRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
         var movesLeft = -1; var movesAtDrag = -1
         var pendingSpec: Pair<Int, Int>? = null
         var settling = false; var stableFrames = 0; var prevSettle: Array<FloatArray>? = null
@@ -588,6 +600,27 @@ class BotService : AccessibilityService() {
                 for (l in learned) knownEntry.add(if (useDex) Dex.identify(l) else null)
                 if (known.isEmpty()) {
                     if (now - waitingSince > 300_000) { autoStop("⏹ Parado: 5 min sem ver uma batalha"); return }
+                    // Tela de informação da fase (antes de apertar Start): lê o nome do inimigo e "Moves/Time"
+                    // para mostrar a recomendação de time ANTES da batalha começar.
+                    if (useDex && now - lastInfoOcr > 2500) {
+                        lastInfoOcr = now
+                        screenshotRetry(1)?.let { shot ->
+                            val small = runCatching { Bitmap.createScaledBitmap(shot, shot.width / 2, shot.height / 2, true) }.getOrNull()
+                            shot.recycle()
+                            if (small != null) readText(small) { t -> infoRef.set(t) }
+                        }
+                    }
+                    infoRef.getAndSet(null)?.let { t ->
+                        val up = t.uppercase()
+                        if (stageMode == 0) { if (up.contains("MOVES")) stageMode = 2 else if (up.contains("TIME")) stageMode = 1 }
+                        var found: DexEntry? = null
+                        for (line in t.split('\n')) {
+                            val e = Dex.findByText(line.trim()) ?: continue
+                            if (found == null || e.name.length > found!!.name.length) found = e
+                        }
+                        if (found != null && opponentRef.get() == null) opponentRef.set(found)
+                    }
+                    opponentRef.get()?.let { opp -> if (recShownFor != opp.name + ":0") { recShownFor = opp.name + ":0"; recommendation(Dex.recommend(opp, emptyList())) } }
                     // esperando há um tempo com captura rápida: confere de novo se a imagem dela está certa
                     if (CaptureService.instance != null && now - lastCapCheck > 4000) {
                         lastCapCheck = now; verifyCapture(); prev = null; continue
@@ -802,6 +835,11 @@ class BotService : AccessibilityService() {
                     dexTxt += if (megaEvolved) " • Mega ✓" else " • Mega ${minOf(megaCount, megaNeed)}/$megaNeed"
                 }
                 if (opp != null) dexTxt = " • vs ${opp.name}"
+                val recKey = if (opp != null) opp.name + ":" + knownEntry.count { it != null } else null
+                if (opp != null && recKey != recShownFor) {
+                    recShownFor = recKey
+                    recommendation(Dex.recommend(opp, knownEntry.filterNotNull(), disruptions))
+                }
             }
             // MODO JOGADAS: uma jogada por vez. Depois de arrastar, espera a cascata terminar (tabuleiro
             // parado em 2 prints seguidos) e confere pelo contador se o jogo aceitou a jogada.

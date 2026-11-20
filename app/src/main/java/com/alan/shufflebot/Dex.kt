@@ -145,6 +145,40 @@ object Dex {
         return byName[n]
     }
 
+    /** Tipos que batem forte no tipo [def]. */
+    fun strongAgainst(def: String): List<String> = if (!ready) emptyList() else superEff.filter { def in it.value }.keys.sorted()
+
+    /**
+     * Recomendação de time contra [opp]: como está o time atual (×2 / ×1 / ×½) e os melhores Pokémon
+     * da Dex que são super efetivos (maior ataque; Mega e habilidade de dano contam a favor).
+     */
+    fun recommend(opp: DexEntry, team: List<DexEntry>, disruptions: Map<String, Int> = emptyMap()): String {
+        if (!ready) return ""
+        val sb = StringBuilder()
+        sb.append("vs ${opp.name} (${opp.type}) • forte: ${strongAgainst(opp.type).joinToString("/")}\n")
+        if (team.isNotEmpty()) {
+            sb.append("Seu time: ")
+            sb.append(team.distinctBy { it.baseName }.joinToString(", ") { e ->
+                val m = typeMult(e.type, opp.type)
+                e.name + when { m > 1f -> " ×2 ✓"; m < 1f -> " ×½ ✗"; else -> " ×1" }
+            })
+            sb.append("\n")
+        }
+        fun power(e: DexEntry): Float {
+            var w = e.ap.toFloat()
+            if (e.func.contains("Dano")) w *= 1f + (e.rates[0] * 0.6f + e.rates[1] * 0.3f + e.rates[2] * 0.1f) * (e.mult - 1f).coerceAtLeast(0f)
+            if (e.isMega) w *= 1.25f
+            return w
+        }
+        val breakable = (disruptions["rocha"] ?: 0) + (disruptions["bloco"] ?: 0)
+        val good = entries.filter { typeMult(it.type, opp.type) > 1f }
+        val megas = good.filter { it.isMega }.sortedByDescending { power(it) + (if (it.megaRemoves && breakable > 0) 200f else 0f) }.take(2)
+        val normal = good.filter { !it.isMega }.sortedByDescending { power(it) }.take(4)
+        if (megas.isNotEmpty()) sb.append("Mega: " + megas.joinToString(", ") { "${it.name} (${it.type}, ${it.ap})" } + "\n")
+        if (normal.isNotEmpty()) sb.append("Recomendados: " + normal.joinToString(", ") { "${it.name} (${it.type} ${it.ap}, ${it.skill})" })
+        return sb.toString().trimEnd()
+    }
+
     /** Existe forma Mega desse Pokémon? (para saber quem é o Mega do time) */
     fun megaOf(e: DexEntry): DexEntry? = if (!ready || e.isMega) null else byName[norm("Mega " + e.name)]
 
