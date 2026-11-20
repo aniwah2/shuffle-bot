@@ -248,7 +248,7 @@ class FramesTest {
         for (n in listOf("Nidoking", "Rowlet", "Volcanion", "Blaziken", "Xerneas")) {
             val opp = Dex.findByText(n) ?: continue
             val team = listOfNotNull(Dex.findByText("Charizard"), Dex.findByText("Pikachu"), Dex.findByText("Swampert"))
-            println("[rec] " + Dex.recommend(opp, team).replace("\n", " | "))
+            val rc = Dex.recommend(opp, team); println("[rec] " + rc.text().replace("\n", " | ") + " | idx=" + rc.picks.map { it.index })
         }
     }
 

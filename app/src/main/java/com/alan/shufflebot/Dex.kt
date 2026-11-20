@@ -18,6 +18,7 @@ class DexEntry(
     val removeCount: Int = 0,
     val megaRemoves: Boolean = false, // efeito Mega apaga rochas/blocos/etc.
     val megaIconsMin: Int = 0,
+    val index: Int = -1,              // posição na folha de ícones (sprites48.webp, 34 por linha, 48 px)
 ) {
     val isMega: Boolean get() = name.startsWith("Mega ") || name.startsWith("Primal ")
     val baseName: String get() = name.substringBefore(" (").removePrefix("Mega ").removePrefix("Primal ").trim()
@@ -93,7 +94,7 @@ object Dex {
                     floatArrayOf(r.getDouble(0).toFloat(), r.getDouble(1).toFloat(), r.getDouble(2).toFloat()),
                     o.optDouble("m", 1.0).toFloat(), o.optInt("mi", 0),
                     if (o.has("rt") && !o.isNull("rt")) o.getString("rt") else null, o.optInt("rn", 0),
-                    o.optInt("mr", 0) == 1, o.optInt("mim", 0),
+                    o.optInt("mr", 0) == 1, o.optInt("mim", 0), i,
                 )
                 list.add(e)
                 byName.putIfAbsent(norm(e.name), e)
@@ -152,18 +153,21 @@ object Dex {
      * Recomendação de time contra [opp]: como está o time atual (×2 / ×1 / ×½) e os melhores Pokémon
      * da Dex que são super efetivos (maior ataque; Mega e habilidade de dano contam a favor).
      */
-    fun recommend(opp: DexEntry, team: List<DexEntry>, disruptions: Map<String, Int> = emptyMap()): String {
-        if (!ready) return ""
-        val sb = StringBuilder()
-        sb.append("vs ${opp.name} (${opp.type}) • forte: ${strongAgainst(opp.type).joinToString("/")}\n")
-        if (team.isNotEmpty()) {
-            sb.append("Seu time: ")
-            sb.append(team.distinctBy { it.baseName }.joinToString(", ") { e ->
-                val m = typeMult(e.type, opp.type)
-                e.name + when { m > 1f -> " ×2 ✓"; m < 1f -> " ×½ ✗"; else -> " ×1" }
-            })
-            sb.append("\n")
+    class Recommendation(
+        val opp: DexEntry, val strong: List<String>,
+        val team: List<Pair<DexEntry, Float>>,     // Pokémon do time e multiplicador contra o inimigo
+        val megas: List<DexEntry>, val picks: List<DexEntry>,
+    ) {
+        fun text(): String {
+            val sb = StringBuilder("vs ${opp.name} (${opp.type}) • forte: ${strong.joinToString("/")}\n")
+            if (team.isNotEmpty()) sb.append("Seu time: " + team.joinToString(", ") { (e, m) -> e.name + when { m > 1f -> " ×2 ✓"; m < 1f -> " ×½ ✗"; else -> " ×1" } } + "\n")
+            if (megas.isNotEmpty()) sb.append("Mega: " + megas.joinToString(", ") { "${it.name} (${it.type}, ${it.ap})" } + "\n")
+            if (picks.isNotEmpty()) sb.append("Recomendados: " + picks.joinToString(", ") { "${it.name} (${it.type} ${it.ap}, ${it.skill})" })
+            return sb.toString().trimEnd()
         }
+    }
+
+    fun recommend(opp: DexEntry, team: List<DexEntry>, disruptions: Map<String, Int> = emptyMap()): Recommendation {
         fun power(e: DexEntry): Float {
             // ataque manda; habilidade de dano dá um bônus pequeno (limitado: Counterattack e cia dependem de condição)
             var w = e.ap.toFloat()
@@ -172,12 +176,10 @@ object Dex {
             return w
         }
         val breakable = (disruptions["rocha"] ?: 0) + (disruptions["bloco"] ?: 0)
-        val good = entries.filter { typeMult(it.type, opp.type) > 1f }
+        val good = if (ready) entries.filter { typeMult(it.type, opp.type) > 1f } else emptyList()
         val megas = good.filter { it.isMega }.sortedByDescending { power(it) + (if (it.megaRemoves && breakable > 0) 200f else 0f) }.take(2)
         val normal = good.filter { !it.isMega }.sortedByDescending { power(it) }.take(4)
-        if (megas.isNotEmpty()) sb.append("Mega: " + megas.joinToString(", ") { "${it.name} (${it.type}, ${it.ap})" } + "\n")
-        if (normal.isNotEmpty()) sb.append("Recomendados: " + normal.joinToString(", ") { "${it.name} (${it.type} ${it.ap}, ${it.skill})" })
-        return sb.toString().trimEnd()
+        return Recommendation(opp, strongAgainst(opp.type), team.distinctBy { it.baseName }.map { it to typeMult(it.type, opp.type) }, megas, normal)
     }
 
     /** Existe forma Mega desse Pokémon? (para saber quem é o Mega do time) */

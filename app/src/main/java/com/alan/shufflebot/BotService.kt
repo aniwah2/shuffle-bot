@@ -30,6 +30,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ImageView
+import android.widget.HorizontalScrollView
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -47,7 +49,17 @@ class BotService : AccessibilityService() {
     private var panel: LinearLayout? = null
     private var panelParams: WindowManager.LayoutParams? = null
     private var statusText: TextView? = null
-    private var recText: TextView? = null
+    private var recBox: LinearLayout? = null
+    private val spriteSheet: Bitmap? by lazy {
+        runCatching { assets.open("sprites48.webp").use { android.graphics.BitmapFactory.decodeStream(it) } }.getOrNull()
+    }
+    private fun icon(e: DexEntry): Bitmap? {
+        val sh = spriteSheet ?: return null
+        if (e.index < 0) return null
+        val x = (e.index % 34) * 48; val y = (e.index / 34) * 48
+        if (x + 48 > sh.width || y + 48 > sh.height) return null
+        return runCatching { Bitmap.createBitmap(sh, x, y, 48, 48) }.getOrNull()
+    }
     private var startBtn: Button? = null
     private var calibBtn: Button? = null
     private var teamBtn: Button? = null
@@ -143,11 +155,7 @@ class BotService : AccessibilityService() {
             text = "Parado"
             setTextColor(Color.rgb(180, 220, 255)); textSize = 11f
         }
-        val rec = TextView(this).apply {
-            text = ""; visibility = View.GONE
-            setTextColor(Color.rgb(255, 230, 150)); textSize = 10f
-            maxWidth = (resources.displayMetrics.widthPixels * 0.9f).toInt()
-        }
+        val rec = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val start = smallButton("▶ Iniciar") { if (running) stopBot() else startBot() }
         val calib = smallButton("Calibrar") { toggleCalibration() }
@@ -188,12 +196,44 @@ class BotService : AccessibilityService() {
         }
 
         wm.addView(root, p)
-        panel = root; panelParams = p; statusText = status; recText = rec; startBtn = start; calibBtn = calib
+        panel = root; panelParams = p; statusText = status; recBox = rec; startBtn = start; calibBtn = calib
     }
 
     private fun status(msg: String) = main.post { statusText?.text = msg }
-    private fun recommendation(msg: String?) = main.post {
-        recText?.text = msg ?: ""; recText?.visibility = if (msg.isNullOrEmpty()) View.GONE else View.VISIBLE
+
+    /** Mostra a recomendação no painel com os ícones dos Pokémon. */
+    private fun recommendation(r: Dex.Recommendation?) = main.post {
+        val box = recBox ?: return@post
+        box.removeAllViews()
+        if (r == null) { box.visibility = View.GONE; return@post }
+        fun label(t: String, color: Int = Color.rgb(255, 230, 150), size: Float = 10f) = TextView(this).apply {
+            text = t; setTextColor(color); textSize = size
+        }
+        fun iconView(e: DexEntry, sub: String, color: Int): View = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(2), 0, dp(2), 0)
+            addView(ImageView(this@BotService).apply {
+                icon(e)?.let { setImageBitmap(it) }
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+            })
+            addView(label(e.name.take(14), Color.WHITE, 8f).apply { gravity = Gravity.CENTER })
+            addView(label(sub, color, 8f).apply { gravity = Gravity.CENTER })
+        }
+        fun row(title: String, items: List<Triple<DexEntry, String, Int>>) {
+            if (items.isEmpty()) return
+            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            line.addView(label(title).apply { setPadding(0, 0, dp(4), 0) })
+            for ((e, sub, c) in items) line.addView(iconView(e, sub, c))
+            box.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(line) })
+        }
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        head.addView(ImageView(this).apply { icon(r.opp)?.let { setImageBitmap(it) }; layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)) })
+        head.addView(label("vs ${r.opp.name} (${r.opp.type})\nforte contra ele: ${r.strong.joinToString("/")}", Color.WHITE, 10f))
+        box.addView(head)
+        row("Seu time:", r.team.map { (e, m) -> Triple(e, when { m > 1f -> "×2 ✓"; m < 1f -> "×½ ✗"; else -> "×1" }, when { m > 1f -> Color.rgb(120, 255, 120); m < 1f -> Color.rgb(255, 120, 120); else -> Color.LTGRAY }) })
+        row("Mega:", r.megas.map { Triple(it, "${it.type} ${it.ap}", Color.rgb(255, 230, 150)) })
+        row("Dex:", r.picks.map { Triple(it, "${it.type} ${it.ap}", Color.rgb(255, 230, 150)) })
+        box.visibility = View.VISIBLE
     }
 
     // ---------------------------------------------------------------- calibração
