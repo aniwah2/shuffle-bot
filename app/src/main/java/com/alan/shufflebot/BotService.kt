@@ -742,7 +742,9 @@ class BotService : AccessibilityService() {
             // disrupções conhecidas (caixote, bloco de metal...) não contam contra
             val disruptCells = (0 until total).count { view.species[it] >= 0 && !knownFree[it] && learner.isDisrupt(feats[it]) }
             val needed = maxOf(6, (total - view.blocks - disruptCells) * 3 / 10)
-            if (recognized < needed || knownFreeCount < 3 || view.empty > 9) {
+            // Casas vazias: barreira/gelo no topo de uma coluna impede o jogo de repor as peças de baixo,
+            // e as casas ficam vazias de verdade (fase 188). Muitas vazias só é "animação" se quase nada é reconhecido.
+            if (recognized < needed || knownFreeCount < 3 || (view.empty > 9 && recognized < 12)) {
                 // Parte do tabuleiro ainda é conhecida e o resto forma Pokémon consistentes (o Mega evoluiu e
                 // mudou de ícone, ou entrou Pokémon novo): se isso se repetir em 2 prints seguidos, aprende.
                 val partial = recognized >= maxOf(6, (total - view.blocks) * 3 / 10)

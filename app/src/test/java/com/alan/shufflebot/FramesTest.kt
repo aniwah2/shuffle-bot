@@ -243,6 +243,21 @@ class FramesTest {
         }
     }
 
+    @Test fun casasVazias_fase188() {
+        Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
+        val r = BoardReader(); val l = BattleLearner(r)
+        for (n in listOf("v24_120", "v24_150", "v24_120", "v24_150")) {
+            val img = load("$n.png"); val g = BoardGeom.guess(img.width, img.height)
+            val f = r.features(img, g)!!; val v = r.analyze(f, 15f, r.frozenByBorder(img, g))
+            if (l.known.isEmpty()) l.tryLearnDex(v, f)
+            val kf = BooleanArray(36) { v.movable[it] && l.isKnown(f[it]) }
+            val rec = (0 until 36).count { v.species[it] >= 0 && (kf[it] || v.frozen[it]) }
+            val sp = IntArray(36) { if (kf[it]) v.species[it] else -(it + 1) }
+            val m = Solver.best(sp, 6, emptySet(), BooleanArray(36) { !kf[it] }, v.frozen, empty = v.isEmpty)
+            println("[vazias] $n: vazias=${v.empty} reconhecidas=$rec livres=${kf.count { it }} time=${l.known.mapNotNull { Dex.identify(it)?.name }} jogada=$m")
+        }
+    }
+
     @Test fun dano_preferePokemonSuperEfetivo() {
         Dex.loadFrom(File("src/main/assets/dex.json").readText(), File("src/main/assets/sprites.bin").readBytes())
         val vap = Dex.findByText("Vaporeon")!!; val amp = Dex.findByText("Mega Ampharos")!!
