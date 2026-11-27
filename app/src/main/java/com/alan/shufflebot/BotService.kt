@@ -190,13 +190,13 @@ class BotService : AccessibilityService() {
                     lx = e.rawX; ly = e.rawY
                     wm.updateViewLayout(root, p)
                 }
-                MotionEvent.ACTION_UP -> { prefs.panelX = p.x; prefs.panelY = p.y }
+                MotionEvent.ACTION_UP -> { clampPanel(); prefs.panelX = p.x; prefs.panelY = p.y }
             }
             true
         }
 
         wm.addView(root, p)
-        root.viewTreeObserver.addOnGlobalLayoutListener { updatePanelRect() }
+        root.viewTreeObserver.addOnGlobalLayoutListener { updatePanelRect(); clampPanel() }
         panel = root; panelParams = p; statusText = status; recBox = rec; startBtn = start; calibBtn = calib
     }
 
@@ -283,6 +283,31 @@ class BotService : AccessibilityService() {
     private fun systemBars(): Insets = wm.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(
         WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
     )
+
+    /**
+     * Mantém o painel SEMPRE visível. Se ele foi arrastado num jogo deitado (ex.: Genshin), a posição
+     * salva fica fora da tela quando o celular está em pé, e o painel "some" no Shuffle.
+     */
+    private fun clampPanel() {
+        val v = panel ?: return; val p = panelParams ?: return
+        val b = screenBounds()
+        val w = v.width.coerceAtLeast(dp(120)); val h = v.height.coerceAtLeast(dp(40))
+        val nx = p.x.coerceIn(0, (b.width() - w).coerceAtLeast(0))
+        val ny = p.y.coerceIn(0, (b.height() - h).coerceAtLeast(0))
+        if (nx != p.x || ny != p.y) { p.x = nx; p.y = ny; runCatching { wm.updateViewLayout(v, p) } }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        main.postDelayed({ clampPanel() }, 300)   // girou a tela: traz o painel de volta
+    }
+
+    /** Volta o painel para o canto de cima (botão no app). */
+    fun resetPanel() = main.post {
+        val v = panel ?: return@post; val p = panelParams ?: return@post
+        p.x = dp(10); p.y = dp(80); Prefs(this).panelX = p.x; Prefs(this).panelY = p.y
+        runCatching { wm.updateViewLayout(v, p) }
+    }
 
     /** Mantém a moldura sempre dentro da tela física. */
     private fun clampFrame(p: WindowManager.LayoutParams) {
@@ -930,8 +955,10 @@ class BotService : AccessibilityService() {
             if (stageMode == 2 && settling) {
                 val ch = prevSettle?.let { reader.changedCells(it, feats, 18f) } ?: 99
                 prevSettle = feats
-                stableFrames = if (ch == 0) stableFrames + 1 else 0
-                if (now - moveDoneAt < 600 || stableFrames < 2) { status("⏳ Esperando a cascata terminar…"); continue }
+                // Ícones de Mega e o fundo piscam o tempo todo: até 3 casas mudando conta como "parado".
+                // E nunca espera mais de 3 s — antes ficava preso aqui por quase um minuto.
+                stableFrames = if (ch <= 3) stableFrames + 1 else 0
+                if (now - moveDoneAt < 600 || (stableFrames < 2 && now - moveDoneAt < 3000)) { status("⏳ Esperando a cascata terminar…"); continue }
                 settling = false
                 val lm = lastMove; val bm = beforeMove
                 val accepted = (movesLeft in 0 until movesAtDrag) ||

@@ -99,6 +99,14 @@ class MainActivity : Activity() {
         })
 
         col.addView(Button(this).apply {
+            text = "Trazer o painel do bot de volta para a tela"
+            setOnClickListener {
+                prefs.panelX = 20; prefs.panelY = 200
+                BotService.instance?.resetPanel()
+                Toast.makeText(this@MainActivity, "Painel no canto de cima", Toast.LENGTH_SHORT).show()
+            }
+        })
+        addView(Button(this).apply {
             text = "Voltar para a grade automática (apagar calibração)"
             setOnClickListener {
                 prefs.boardSize = 0; prefs.boardLeft = -1; prefs.boardTop = -1
